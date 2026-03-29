@@ -1,0 +1,23 @@
+lab_id: "Fluid-Lab-Demo"
+bandwidth_kbps: 200
+
+llm:
+  model: "claude-sonnet-4-6"
+  api_key: "${ANTHROPIC_API_KEY}"
+  max_tokens: 2048
+  temperature: 0.2
+  # Set use_mock: true to run without an API key (rule-based planner)
+  use_mock: true
+
+mcp:
+  compress: true
+
+orchestrator:
+  max_replan_depth: 3
+  hitl_timeout_s: 300
+  latency_threshold_ms: 5000
+
+web_monitor:
+  host: "0.0.0.0"
+  port: 8765
+  enabled: false

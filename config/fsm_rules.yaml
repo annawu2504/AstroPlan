@@ -1,0 +1,52 @@
+Fluid-Lab-Demo:
+  subsystems:
+    fluid_pump:
+      states: [IDLE, ACTIVE, FAULT]
+      initial: IDLE
+      transitions:
+        IDLE:
+          activate_pump: ACTIVE
+        ACTIVE:
+          deactivate_pump: IDLE
+          fault_detected: FAULT
+        FAULT:
+          reset_pump: IDLE
+
+    thermal:
+      states: [IDLE, HEATING, TARGET_REACHED, FAULT]
+      initial: IDLE
+      transitions:
+        IDLE:
+          heat_to_40:
+            target: HEATING
+            requires:
+              fluid_pump: ACTIVE
+        HEATING:
+          temp_reached: TARGET_REACHED
+          fault_detected: FAULT
+        TARGET_REACHED:
+          cool_down: IDLE
+        FAULT:
+          reset_thermal: IDLE
+
+    camera:
+      states: [IDLE, ACTIVE]
+      initial: IDLE
+      transitions:
+        IDLE:
+          activate_camera: ACTIVE
+        ACTIVE:
+          deactivate_camera: IDLE
+
+  thresholds:
+    thermal.temperature:
+      min: -20.0
+      max: 85.0
+      severity: CRITICAL
+    fluid_pump.flow_rate:
+      min: 5.0
+      max: 50.0
+      severity: WARNING
+    thermal.pressure:
+      max: 2.5
+      severity: CRITICAL
