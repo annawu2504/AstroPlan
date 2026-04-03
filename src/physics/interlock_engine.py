@@ -1,6 +1,6 @@
 """Physical interlock engine — FSM-based safety gate for hardware actions.
 
-Reads fsm_rules.yaml to know which state transitions are legal and
+Reads config/fsm_rules.yaml to know which state transitions are legal and
 which prerequisite subsystem states must be satisfied before a skill
 is allowed to execute.
 """
@@ -23,7 +23,7 @@ class InterlockEngine:
 
     Usage::
 
-        engine = InterlockEngine.from_yaml("fsm_rules.yaml", lab_id="Fluid-Lab-Demo")
+        engine = InterlockEngine.from_yaml("config/fsm_rules.yaml", lab_id="Fluid-Lab-Demo")
         engine.validate_action("heat_to_40")   # raises InterlockViolation if unsafe
         engine.apply_action("activate_pump")
     """

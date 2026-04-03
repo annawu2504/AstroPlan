@@ -121,7 +121,7 @@ async def main() -> None:
     )
 
     # --- Layer 2: Physics ---
-    interlock = InterlockEngine.from_yaml("fsm_rules.yaml", lab_id=lab_id)
+    interlock = InterlockEngine.from_yaml("config/fsm_rules.yaml", lab_id=lab_id)
 
     # --- Layer 3: Memory & Output ---
     working_memory = WorkingMemory(lab_id=lab_id)

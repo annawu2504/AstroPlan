@@ -108,3 +108,20 @@ class ExecutionResult:
     status: str                                      # "completed" | "failed" | "suspended"
     total_steps: int = 0
     execution_log: List[Dict[str, Any]] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Tree execution (hierarchical planning)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TreeExecutionResult:
+    """Result returned by a tree node's run() method.
+
+    Tracks execution state through the recursive tree traversal so that
+    parent nodes can aggregate child outcomes.
+    """
+    success: bool
+    step_id: int
+    decision_id: int
+    terminate_reason: Optional[str] = None  # e.g. "max_depth"

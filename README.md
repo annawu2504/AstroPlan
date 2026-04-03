@@ -12,7 +12,7 @@
 ## 功能概览
 
 - **层级 LLM 智能体树**：`AgentNode`（局部推理）+ `ControlFlowNode`（Sequence / Fallback / Parallel）+ `SubTreeReplanner`（局部重规划）
-- **物理联锁引擎**：基于 FSM 的安全门，读取 `fsm_rules.yaml`，拦截非法状态转换
+- **物理联锁引擎**：基于 FSM 的安全门，读取 `config/fsm_rules.yaml`，拦截非法状态转换
 - **遥测总线**：带时间戳处理乱序数据，超阈值自动触发重规划
 - **工作记忆**：强类型 `SharedContext`，全局单一状态源，消除深层节点幻觉
 - **MCP 技能注册表**：`@mcp_tool` 装饰器注册执行技能，SpaceWire 带宽感知压缩
@@ -25,9 +25,9 @@
 
 ```
 AstroPlan/
-└── config/
-    ├── config.yaml          # LLM / MCP / 编排器全局配置
-├── fsm_rules.yaml           # 物理联锁有限状态机规则表
+├── config/
+│   ├── config.yaml          # LLM / MCP / 编排器全局配置
+│   └── fsm_rules.yaml       # 物理联锁有限状态机规则表
 ├── requirements.txt         # 依赖声明
 ├── main.py                  # 入口脚本 (asyncio.run)
 └── src/
@@ -70,7 +70,7 @@ pip install -r requirements.txt
 
 ### 2. 配置（可选）
 
-编辑 `config.yaml` 调整 LLM 模型或设置 API Key：
+编辑 `config/config.yaml` 调整 LLM 模型或设置 API Key：
 
 ```yaml
 llm:
@@ -145,7 +145,7 @@ LaboratoryEnvironment.run()               # Layer 4: 编排器
 
 ## 联锁规则配置
 
-`fsm_rules.yaml` 定义每个子系统的合法状态转换：
+`config/fsm_rules.yaml` 定义每个子系统的合法状态转换：
 
 ```yaml
 subsystems:
@@ -158,7 +158,7 @@ subsystems:
         requires: {}           # 无前置依赖
 ```
 
-新增实验设备只需在 `fsm_rules.yaml` 添加条目，无需修改代码。
+新增实验设备只需在 `config/fsm_rules.yaml` 添加条目，无需修改代码。
 
 ---
 

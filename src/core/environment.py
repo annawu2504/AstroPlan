@@ -3,23 +3,17 @@
 Wires all layers together and drives the main execution loop:
   1. Ingest task goals
   2. Build telemetry / working memory
-  3. Run the hierarchical agent tree
+  3. Run the hierarchical agent tree (recursive)
   4. Dispatch actions through the output pipeline
   5. Monitor for deviations and trigger replanning
 """
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from src.types import (
-    AgentDecision,
-    EventTriggerSignal,
-    ExecutionResult,
-    InterventionSignal,
-    SharedContext,
-)
+from src.cognition.agent_node import AgentNode
+from src.types import ExecutionResult
 
 
 class LaboratoryEnvironment:
@@ -45,6 +39,7 @@ class LaboratoryEnvironment:
         hitl_operator: Any,
         web_monitor: Any,
         mcp_registry: Any,
+        max_depth: int = 10,
     ):
         self.lab_id = lab_id
         self._interlock = interlock_engine
@@ -60,143 +55,73 @@ class LaboratoryEnvironment:
         self._hitl = hitl_operator
         self._monitor = web_monitor
         self._mcp = mcp_registry
+        self._max_depth = max_depth
 
-        self._plan: List[Dict[str, Any]] = []
         self._running = False
+        # Flat plan kept for legacy monitor/replanner compatibility
+        self._plan: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Main execution loop
     # ------------------------------------------------------------------
 
     async def run(self, nl_goal: str) -> ExecutionResult:
-        """Execute a natural-language mission goal end-to-end."""
+        """Execute a natural-language mission goal end-to-end using the agent tree."""
         self._running = True
         print(f"[{self.lab_id}] Mission start: {nl_goal}")
 
         # Start web monitor in background
         asyncio.ensure_future(self._monitor.start())
 
-        # Initial planning
+        # Create root agent node from the injected agent (preserving LLM client)
+        root = AgentNode(
+            node_id="root",
+            llm_client=self._agent._llm if hasattr(self._agent, "_llm") else None,
+            depth=0,
+        )
+        root.goal = nl_goal
+
         context = self._memory.snapshot()
-
-        # Build full sequential plan via mock/LLM planner
-        self._plan = self._expand_to_steps(nl_goal, context)
-
-        print(f"[{self.lab_id}] \U0001f9e0 Planner: 生成 {len(self._plan)} 步计划")
-        for i, step in enumerate(self._plan, 1):
-            print(f"    步骤 {i}: {{'skill': '{step.get('skill', '?')}', 'params': {step.get('params', {})}}}")
-
-        # Execute plan steps
         log: List[Dict[str, Any]] = []
-        for step in self._plan:
-            success = await self._execute_step(step, log)
-            if not success:
-                # Trigger replanning for remaining steps
-                remaining_idx = self._plan.index(step)
-                remaining_goals = [
-                    s.get("description", s.get("skill", ""))
-                    for s in self._plan[remaining_idx:]
-                ]
-                trigger = EventTriggerSignal(
-                    source="step_failed",
-                    priority=5,
-                    payload={"failed_step": step.get("skill")},
-                    preemptive=False,
-                )
-                replan_ctx = self._replanner.replan(
-                    trigger=trigger,
-                    failed_step=step.get("skill"),
-                    context=self._memory.snapshot(),
-                    remaining_goals=remaining_goals,
-                )
-                if replan_ctx.new_plan:
-                    # Splice replacement plan in
-                    self._plan[remaining_idx:] = replan_ctx.new_plan
+
+        print(f"[{self.lab_id}] 🧠 Planner: 开始递归树规划 (max_depth={self._max_depth})")
+
+        # Execute the hierarchical tree
+        tree_result = await root.run(
+            context=context,
+            step_id=1,
+            decision_id=1,
+            log=log,
+            max_depth=self._max_depth,
+            env=self,
+        )
 
         self._running = False
+
+        # Build flat plan from log for monitor/output compatibility
+        self._plan = [
+            entry for entry in log
+            if entry.get("type") == "action"
+        ]
         tree_text = self._output.format_tree(self._plan)
         await self._monitor.broadcast(self._plan, tree_text)
 
+        # Print summary
+        actions = [e for e in log if e.get("type") == "action"]
+        expands = [e for e in log if e.get("type") == "expand"]
+        print(f"[{self.lab_id}] 规划完成: {len(expands)} 次展开, {len(actions)} 个动作, "
+              f"总步数={tree_result.step_id - 1}, success={tree_result.success}")
+
+        status = "completed" if tree_result.success else "failed"
         return ExecutionResult(
-            status="completed",
-            total_steps=len(log),
+            status=status,
+            total_steps=tree_result.step_id - 1,
             execution_log=log,
         )
 
     # ------------------------------------------------------------------
-    # Step execution
-    # ------------------------------------------------------------------
-
-    async def _execute_step(
-        self, step: Dict[str, Any], log: List[Dict[str, Any]]
-    ) -> bool:
-        skill = step.get("skill", "noop")
-        params = step.get("params", {})
-
-        # 1. Interlock check
-        try:
-            self._interlock.validate_action(skill)
-        except Exception as exc:
-            print(f"[{self.lab_id}] Interlock blocked '{skill}': {exc}")
-            step["status"] = "failed"
-            return False
-
-        # 2. Transition FSM subsystem (skills handle their own interlock via MCP handlers)
-        subsystem = step.get("subsystem", self._skill_to_subsystem(skill))
-
-        # 3. Dispatch via MCP or direct HW
-        step["status"] = "running"
-        tree_text = self._output.format_tree(self._plan)
-        await self._monitor.broadcast(self._plan, tree_text)
-
-        action_payload = {"skill": skill, "params": params, "subsystem": subsystem}
-        if self._mcp.has_skill(skill):
-            try:
-                result = self._mcp.call(skill, params)
-                if asyncio.iscoroutine(result):
-                    result = await result
-            except Exception as exc:
-                print(f"[{self.lab_id}] MCP skill '{skill}' raised: {exc}")
-                step["status"] = "failed"
-                return False
-        else:
-            wire = bytearray(
-                json.dumps(action_payload, ensure_ascii=False).encode("utf-8")
-            )
-            tx = await self._hw.execute_instruction(wire)
-            # For async actions, poll until done
-            if skill in self._hw.ASYNC_ACTIONS:
-                for _ in range(30):
-                    await asyncio.sleep(0.1)
-                    res = await self._hw.poll_transaction(tx)
-                    if res.status == "completed":
-                        break
-
-        step["status"] = "completed"
-        self._memory.log_action(action_payload)
-        log.append({**action_payload, "status": "completed"})
-        return True
-
-    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _expand_to_steps(self, goal: str, context: SharedContext) -> List[Dict[str, Any]]:
-        """Ask the agent node for sequential steps by driving the mock planner."""
-        steps: List[Dict[str, Any]] = []
-        # Let the agent node iterate its internal skill sequence
-        for _ in range(10):  # safety cap
-            dec = self._agent.execute_decision(
-                sub_goal=goal, context=context, milestones=[]
-            )
-            if dec.skill != "Act" or not dec.action:
-                break
-            entry = {**dec.action, "status": "pending", "description": goal}
-            steps.append(entry)
-            # Update mock context to advance internal state
-            self._memory.log_action(dec.action)
-            context = self._memory.snapshot()
-        return steps
 
     @staticmethod
     def _skill_to_subsystem(skill: str) -> str:
@@ -223,7 +148,6 @@ class LaboratoryEnvironment:
         )
         if preempt:
             print(f"[{self.lab_id}] PREEMPT: {reason}")
-            # Trigger replanning from scratch
             replan_ctx = self._replanner.replan(
                 trigger=signal,
                 failed_step=None,
