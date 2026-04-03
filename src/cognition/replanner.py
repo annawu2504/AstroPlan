@@ -88,7 +88,7 @@ class SubTreeReplanner:
             failed_step=failed_step,
             context=context,
             new_plan=new_plan,
-            conflict_resolved=True,
+            conflict_resolved=len(new_plan) > 0,
         )
 
     @property

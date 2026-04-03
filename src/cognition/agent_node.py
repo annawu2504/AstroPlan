@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, Dict, List, Optional
 
 from src.types import AgentDecision, Milestone, SharedContext, TreeExecutionResult
@@ -112,8 +113,26 @@ class AgentNode:
     def _mock_plan(
         self, sub_goal: str, context: SharedContext
     ) -> AgentDecision:
-        """Rule-based fallback planner for Fluid-Lab-Demo."""
-        # Check if goal contains "and" - if so, expand into sequence
+        """Rule-based fallback planner for Fluid-Lab-Demo.
+
+        Decision logic (in priority order):
+        1. If sub_goal is an exact atomic skill name → Act immediately.
+        2. If sub_goal contains " and " → Expand by splitting on " and ".
+        3. Otherwise treat as a high-level goal → Expand into remaining skills
+           of _SKILL_SEQUENCE in order (scaffold-stripping: tree nodes are
+           scaffolding, only the leaf Act nodes become DAG nodes).
+        """
+        known = {step["skill"]: step for step in self._SKILL_SEQUENCE}
+
+        # Case 1: goal IS an atomic skill name — execute it directly
+        if sub_goal in known:
+            return AgentDecision(
+                skill="Act",
+                action=known[sub_goal],
+                reasoning=f"Mock planner: executing atomic skill '{sub_goal}'",
+            )
+
+        # Case 2: English compound goal split on " and "
         if " and " in sub_goal.lower():
             subgoals = [s.strip() for s in sub_goal.split(" and ")]
             return AgentDecision(
@@ -122,16 +141,15 @@ class AgentNode:
                 reasoning=f"Mock planner: decomposing compound goal into {len(subgoals)} sub-goals",
             )
 
-        states = context.subsystem_states
-        done = set(context.action_log[i]["skill"] for i in range(len(context.action_log)))
-
-        for step in self._SKILL_SEQUENCE:
-            if step["skill"] not in done:
-                return AgentDecision(
-                    skill="Act",
-                    action=step,
-                    reasoning=f"Mock planner: next pending skill is '{step['skill']}'",
-                )
+        # Case 3: high-level goal — expand into all remaining skills in order
+        done = {e["skill"] for e in context.action_log}
+        remaining = [s for s in known if s not in done]
+        if remaining:
+            return AgentDecision(
+                skill="Expand",
+                action={"control_flow": "Sequence", "subgoals": remaining},
+                reasoning=f"Mock planner: expanding high-level goal into {len(remaining)} skill sub-goals",
+            )
 
         return AgentDecision(
             skill="Think",
@@ -173,6 +191,14 @@ class AgentNode:
         -------
         TreeExecutionResult with success status and updated counters
         """
+        if self.depth > max_depth:
+            return TreeExecutionResult(
+                success=False,
+                step_id=step_id,
+                decision_id=decision_id,
+                terminate_reason="max_depth",
+            )
+
         # Get decision from planner
         decision = self.execute_decision(
             sub_goal=self.goal if self.goal else "complete mission",
@@ -273,6 +299,7 @@ class AgentNode:
             "subsystem": env._skill_to_subsystem(skill),
         }
 
+        _t0 = time.time()
         try:
             if env._mcp.has_skill(skill):
                 result = env._mcp.call(skill, params)
@@ -291,6 +318,9 @@ class AgentNode:
                         res = await env._hw.poll_transaction(tx)
                         if res.status == "completed":
                             break
+
+            # Record RTT for latency estimation (command dispatch → acknowledgement)
+            env._latency.record_rtt((time.time() - _t0) * 1000)
 
             # Log success
             env._memory.log_action(action_payload)
@@ -311,6 +341,8 @@ class AgentNode:
             return True
 
         except Exception as exc:
+            # Record RTT even on failure so the observer sees the attempt
+            env._latency.record_rtt((time.time() - _t0) * 1000)
             print(f"[{env.lab_id}] Action '{skill}' raised: {exc}")
             log.append({
                 "type": "action",

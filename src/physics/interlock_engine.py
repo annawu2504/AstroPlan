@@ -80,10 +80,16 @@ class InterlockEngine:
         return self._states.get(subsystem, "UNKNOWN")
 
     def validate_action(self, action: str) -> None:
-        """Raise InterlockViolation if *action* is not safe to execute right now."""
+        """Raise InterlockViolation if *action* is not safe to execute right now.
+
+        Also raises if the action is not registered in any subsystem, preventing
+        unknown / misspelled skill names from silently bypassing the safety gate.
+        """
+        found = False
         for subsystem, rules in self._transitions.items():
             if action not in rules:
                 continue
+            found = True
             rule = rules[action]
             current = self._states[subsystem]
             if current != rule["from"]:
@@ -98,6 +104,11 @@ class InterlockEngine:
                         f"[{self.lab_id}] Action '{action}' requires '{req_subsystem}' in "
                         f"state '{req_state}' but current state is '{actual}'"
                     )
+        if not found:
+            raise InterlockViolation(
+                f"[{self.lab_id}] Action '{action}' is not registered in any subsystem "
+                f"transition table — possible typo or missing FSM rule."
+            )
 
     def apply_action(self, action: str) -> Optional[str]:
         """Apply *action* and advance FSM states. Returns affected subsystem name."""

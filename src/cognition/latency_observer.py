@@ -63,10 +63,11 @@ class LatencyObserver:
         effective_priority = incoming.priority * latency_factor
 
         if incoming.preemptive and effective_priority > current_priority:
+            rtt_str = f"RTT={rtt:.0f}ms" if rtt is not None else "RTT unknown"
             return True, (
                 f"Preemptive trigger priority {incoming.priority} "
                 f"(effective {effective_priority:.1f}) > current {current_priority}; "
-                f"RTT={rtt:.0f}ms" if rtt else "RTT unknown"
+                f"{rtt_str}"
             )
 
         return False, "No preemption required"

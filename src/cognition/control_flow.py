@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List
 
-from src.types import SharedContext, TreeExecutionResult
+from src.types import EventTriggerSignal, SharedContext, TreeExecutionResult
 
 
 class ControlFlowNode:
@@ -83,10 +83,46 @@ class ControlFlowNode:
             )
 
         if self.control_type == self.SEQUENCE:
-            for child in self.children:
+            for i, child in enumerate(self.children):
                 result = await child.run(context, step_id, decision_id, log, max_depth, env)
                 step_id, decision_id = result.step_id, result.decision_id
                 if not result.success:
+                    # Attempt local sub-tree replanning before propagating failure upward
+                    if hasattr(env, '_replanner'):
+                        remaining_goals = [c.goal for c in self.children[i + 1:]]
+                        trigger = EventTriggerSignal(
+                            source="action_failure", priority=5, preemptive=False
+                        )
+                        fresh_ctx = env._memory.snapshot()
+                        replan_ctx = env._replanner.replan(
+                            trigger=trigger,
+                            failed_step=child.goal,
+                            context=fresh_ctx,
+                            remaining_goals=remaining_goals,
+                        )
+                        if replan_ctx.conflict_resolved and replan_ctx.new_plan:
+                            print(
+                                f"[{env.lab_id}] Replanner: {len(replan_ctx.new_plan)} step(s) "
+                                f"replanned after '{child.goal}' failed"
+                            )
+                            # Lazy import to avoid circular dependency
+                            from src.cognition.agent_node import AgentNode
+                            for step in replan_ctx.new_plan:
+                                rn = AgentNode(
+                                    node_id=f"replan_{step.get('goal', '?')}",
+                                    llm_client=env._agent._llm if hasattr(env._agent, "_llm") else None,
+                                    depth=self.depth + 1,
+                                )
+                                rn.goal = step.get("skill", step.get("goal", "noop"))
+                                r = await rn.run(fresh_ctx, step_id, decision_id, log, max_depth, env)
+                                step_id, decision_id = r.step_id, r.decision_id
+                                if not r.success:
+                                    return TreeExecutionResult(
+                                        success=False, step_id=step_id, decision_id=decision_id
+                                    )
+                            return TreeExecutionResult(
+                                success=True, step_id=step_id, decision_id=decision_id
+                            )
                     return TreeExecutionResult(
                         success=False, step_id=step_id, decision_id=decision_id
                     )
@@ -103,12 +139,14 @@ class ControlFlowNode:
             return TreeExecutionResult(success=False, step_id=step_id, decision_id=decision_id)
 
         elif self.control_type == self.PARALLEL:
-            is_success = True
+            # Run children sequentially and collect all results, then apply majority-vote
+            # via evaluate_children() — consistent with the spec and testable independently.
+            child_results: List[bool] = []
             for child in self.children:
                 result = await child.run(context, step_id, decision_id, log, max_depth, env)
                 step_id, decision_id = result.step_id, result.decision_id
-                if not result.success:
-                    is_success = False
-            return TreeExecutionResult(success=is_success, step_id=step_id, decision_id=decision_id)
+                child_results.append(result.success)
+            success = self.evaluate_children(child_results)
+            return TreeExecutionResult(success=success, step_id=step_id, decision_id=decision_id)
 
         return TreeExecutionResult(success=False, step_id=step_id, decision_id=decision_id)

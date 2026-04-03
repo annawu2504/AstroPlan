@@ -66,7 +66,7 @@ class HardwareExecutor:
         self._pending[tx.tx_id] = {"status": "running", "action": action_obj}
 
         if skill in self.ASYNC_ACTIONS:
-            asyncio.ensure_future(self._run_async(tx, action_obj))
+            asyncio.create_task(self._run_async(tx, action_obj))
         else:
             self._dispatch(skill, action_obj)
             self._pending[tx.tx_id]["status"] = "completed"

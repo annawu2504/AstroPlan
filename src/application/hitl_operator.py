@@ -46,8 +46,7 @@ class HITLSuspensionOperator:
             f"       Awaiting human approval (timeout={self._timeout_s}s)..."
         )
 
-        loop = asyncio.get_event_loop()
-        self._pending = loop.create_future()
+        self._pending = asyncio.Future()
 
         try:
             result: ResumeSignal = await asyncio.wait_for(

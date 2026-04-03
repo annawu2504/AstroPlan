@@ -74,8 +74,8 @@ class LaboratoryEnvironment:
         self._dag = DAGBuilder()  # fresh DAG for each mission run
         print(f"[{self.lab_id}] Mission start: {nl_goal}")
 
-        # Start web monitor in background
-        asyncio.ensure_future(self._monitor.start())
+        # Start web monitor in background (create_task is preferred over ensure_future)
+        asyncio.create_task(self._monitor.start(), name="web_monitor")
 
         # Create root agent node from the injected agent (preserving LLM client)
         root = AgentNode(
