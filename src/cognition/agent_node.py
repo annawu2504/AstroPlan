@@ -301,6 +301,13 @@ class AgentNode:
                 "params": params,
                 "status": "completed",
             })
+            # Register completed atomic action in the DAG
+            env._dag.register_action(
+                skill=skill,
+                params=params,
+                subsystem=env._skill_to_subsystem(skill),
+                status="completed",
+            )
             return True
 
         except Exception as exc:
@@ -313,4 +320,11 @@ class AgentNode:
                 "status": "failed",
                 "error": str(exc),
             })
+            # Register failed atomic action in the DAG so the full picture is preserved
+            env._dag.register_action(
+                skill=skill,
+                params=params,
+                subsystem=env._skill_to_subsystem(skill),
+                status="failed",
+            )
             return False

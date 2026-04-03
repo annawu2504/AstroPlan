@@ -45,6 +45,15 @@ class OutputController:
                 pass  # may already be uncompressed
         return json.loads(raw.decode("utf-8"))
 
+    def generate_dag_json(self, dag_builder: Any) -> bytearray:
+        """Serialize the execution DAG to a human-readable JSON bytearray.
+
+        DAG output is intentionally kept uncompressed so downstream scheduling
+        systems and operators can inspect the dependency graph directly.
+        """
+        raw = json.dumps(dag_builder.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
+        return bytearray(raw)
+
     def format_tree(self, plan_steps: List[Dict[str, Any]]) -> str:
         """Format the current plan tree for the Web Monitor SSE stream."""
         lines = ["=== AstroPlan Tree ==="]

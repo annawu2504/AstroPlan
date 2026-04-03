@@ -87,6 +87,7 @@ class InterventionSignal:
     """Human-in-the-loop input arriving from the Web UI."""
     operator_id: str
     approved: bool
+    reason: Optional[str] = None
     updated_constraints: Optional[Dict[str, Any]] = None
     timestamp: int = 0
 
@@ -108,6 +109,34 @@ class ExecutionResult:
     status: str                                      # "completed" | "failed" | "suspended"
     total_steps: int = 0
     execution_log: List[Dict[str, Any]] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# DAG output layer
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AtomicAction:
+    """A single indivisible hardware operation extracted from the planning tree."""
+    skill: str
+    params: Dict[str, Any] = field(default_factory=dict)
+    subsystem: str = ""
+
+
+@dataclass
+class DAGNode:
+    """One node in the execution DAG, wrapping one AtomicAction."""
+    node_id: str
+    action: AtomicAction
+    status: str = "pending"  # "pending" | "completed" | "failed"
+
+
+@dataclass
+class Edge:
+    """Directed dependency edge between two DAG nodes (from_id must complete before to_id)."""
+    from_id: str
+    to_id: str
+    relation: str = "depends_on"
 
 
 # ---------------------------------------------------------------------------

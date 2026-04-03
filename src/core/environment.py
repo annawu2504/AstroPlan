@@ -13,6 +13,7 @@ import asyncio
 from typing import Any, Dict, List
 
 from src.cognition.agent_node import AgentNode
+from src.control.dag_builder import DAGBuilder
 from src.types import ExecutionResult
 
 
@@ -60,6 +61,8 @@ class LaboratoryEnvironment:
         self._running = False
         # Flat plan kept for legacy monitor/replanner compatibility
         self._plan: List[Dict[str, Any]] = []
+        # DAG accumulates atomic actions during tree execution
+        self._dag: DAGBuilder = DAGBuilder()
 
     # ------------------------------------------------------------------
     # Main execution loop
@@ -68,6 +71,7 @@ class LaboratoryEnvironment:
     async def run(self, nl_goal: str) -> ExecutionResult:
         """Execute a natural-language mission goal end-to-end using the agent tree."""
         self._running = True
+        self._dag = DAGBuilder()  # fresh DAG for each mission run
         print(f"[{self.lab_id}] Mission start: {nl_goal}")
 
         # Start web monitor in background
@@ -106,11 +110,17 @@ class LaboratoryEnvironment:
         tree_text = self._output.format_tree(self._plan)
         await self._monitor.broadcast(self._plan, tree_text)
 
-        # Print summary
+        # Print execution summary
         actions = [e for e in log if e.get("type") == "action"]
         expands = [e for e in log if e.get("type") == "expand"]
         print(f"[{self.lab_id}] 规划完成: {len(expands)} 次展开, {len(actions)} 个动作, "
               f"总步数={tree_result.step_id - 1}, success={tree_result.success}")
+
+        # Output DAG (scaffold stripped — only atomic action nodes remain)
+        dag_json = self._output.generate_dag_json(self._dag)
+        print(f"[{self.lab_id}] DAG: {self._dag.node_count()} nodes, "
+              f"{self._dag.edge_count()} edges")
+        print(dag_json.decode("utf-8"))
 
         status = "completed" if tree_result.success else "failed"
         return ExecutionResult(

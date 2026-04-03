@@ -38,9 +38,8 @@ class GroundCommandReceiver:
             priority = max(priority, 10)  # safety commands always high priority
 
         signal = EventTriggerSignal(
-            trigger_type=cmd_type,
+            source=cmd_type,
             priority=priority,
-            scope=scope,
             payload=payload,
             preemptive=preemptive,
         )
