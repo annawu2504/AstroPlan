@@ -1,0 +1,61 @@
+# AstroPlan Evaluation Configuration
+# ---------------------------------------------------------------------------
+# dataset_type: "alfred" | "wah"
+#   alfred — requires ai2thor + ReAcTree ALFRED dataset
+#   wah    — requires VirtualHome + ReAcTree WAH-NL dataset
+dataset_type: wah
+
+# Path to the JSON test set file (ReAcTree dataset format)
+testset_path: ReAcTree/dataset/wah/test_set.json
+
+task_planner: astroplan
+
+# Percentage of test set to evaluate (1-100). Useful for quick smoke tests.
+eval_portion_pct: 100
+
+# RNG seed for reproducible subset sampling and failure injection.
+random_seed: 0
+
+# Per-task limits (mirror ReAcTree defaults)
+max_steps: 50
+max_decisions: 100
+max_depth: 10
+
+# Output directory for metrics.json and per_task.json
+output_dir: outputs/eval
+
+# ---------------------------------------------------------------------------
+# LLM Backend — uncomment exactly one block
+# ---------------------------------------------------------------------------
+
+# Option A: Ollama (local, no extra Python deps)
+# Requires: ollama serve && ollama pull llama3.1:8b
+backend:
+  backend: ollama
+  model: llama3.1:8b
+  ollama_url: http://localhost:11434
+  timeout_s: 120
+
+# Option B: HuggingFace local inference
+# Requires: pip install transformers accelerate
+# For 8-bit: pip install bitsandbytes
+# backend:
+#   backend: huggingface
+#   model: Qwen/Qwen2.5-3B-Instruct   # or meta-llama/Llama-3.1-8B-Instruct
+#   device_map: auto
+#   load_in_8bit: false
+#   max_new_tokens: 512
+
+# Option C: Anthropic Claude (remote)
+# Requires: pip install anthropic  +  export ANTHROPIC_API_KEY=sk-ant-...
+# backend:
+#   backend: anthropic
+#   model: claude-sonnet-4-6
+#   api_key: "${ANTHROPIC_API_KEY}"
+#   max_tokens: 2048
+#   temperature: 0.2
+
+# Option D: Mock planner (no LLM — uses AgentNode rule-based mock)
+# Useful for testing the evaluator pipeline without any model.
+# backend:
+#   backend: mock

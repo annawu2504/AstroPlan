@@ -20,7 +20,8 @@
 - **地面指令接收 / HITL 挂起**：支持抢占式任务与人工审核不可逆操作
 - **Web 监控**：WebSocket SSE 实时推送计划树视图
 - **调度器接口**：`IPlannerService` + `ISchedulerAdapter` 定义 AstroPlan ↔ agentos_scheduler 的显式边界
-- **独立评测**：`MockScheduler` 无需真实调度器即可运行完整规划–执行–重规划循环
+- **独立评测（DAG 级）**：`MockScheduler` 无需真实调度器即可运行完整规划–执行–重规划循环
+- **基准评测（环境级）**：`AstroPlanEvaluator` 对接 ALFRED / WAH-NL 模拟器，可插拔 LLM 后端（Ollama / HuggingFace / Anthropic）
 
 ---
 
@@ -43,9 +44,13 @@ AstroPlan/
     │   ├── planner_service.py   #   IPlannerService Protocol
     │   └── scheduler_adapter.py #   ISchedulerAdapter, IStatusReporter, ExecutionSnapshot
     │
-    ├── evaluation/              # ★ 独立评测工具
+    ├── evaluation/              # ★ 评测工具
     │   ├── __init__.py
-    │   └── mock_scheduler.py    #   MockScheduler — ISchedulerAdapter 的本地模拟实现
+    │   ├── mock_scheduler.py    #   MockScheduler — ISchedulerAdapter 的本地模拟实现
+    │   ├── evaluator.py         #   AstroPlanEvaluator — ALFRED / WAH-NL 端到端评测
+    │   └── environments/
+    │       ├── alfred_adapter.py #  ThorConnector 适配器（可选 ai2thor 依赖）
+    │       └── wah_adapter.py   #   WahUnityEnv 适配器（可选 VirtualHome 依赖）
     │
     ├── core/
     │   ├── config_loader.py     # load_config() → AppConfig
@@ -67,7 +72,8 @@ AstroPlan/
     │   ├── agent_node.py        # AgentNode（plan_mode 感知）
     │   ├── control_flow.py      # ControlFlowNode（Sequence / Fallback / Parallel）
     │   ├── replanner.py         # SubTreeReplanner
-    │   └── latency_observer.py  # LatencyObserver
+    │   ├── latency_observer.py  # LatencyObserver
+    │   └── llm_backends.py      # ★ LLM 后端抽象层（Ollama / HuggingFace / Anthropic）
     └── application/
         ├── ground_command_receiver.py
         ├── hitl_operator.py
@@ -360,13 +366,93 @@ class AgentOSSchedulerAdapter:
 
 ---
 
+## 基准评测（ALFRED / WAH-NL）
+
+`AstroPlanEvaluator` 将 AstroPlan 接入 ReAcTree 的标准评测环境，支持与 ReAcTree 基线直接比较。
+
+### 评测架构
+
+```
+config/eval_config.yaml
+        │
+AstroPlanEvaluator
+        ├── LLM 后端（src/cognition/llm_backends.py）
+        │       ├── OllamaBackend    — 本地 Ollama REST（llama3.1:8b / qwen2.5:3b …）
+        │       ├── HuggingFaceBackend — 本地 transformers pipeline
+        │       └── AnthropicBackend — Claude API
+        │
+        └── 环境适配器（src/evaluation/environments/）
+                ├── AlfredAdapter   — 包装 ReAcTree ThorConnector（ai2thor）
+                └── WahAdapter      — 包装 ReAcTree WahUnityEnv（VirtualHome）
+```
+
+`EnvMCPBridge`（evaluator.py 内）替换 MCPRegistry，将所有 NL 技能调用路由至环境适配器，无需预注册 ALFRED / WAH 动态技能集。模拟器未安装时自动降级为 `_MockEnvAdapter`。
+
+### 指标
+
+| 指标 | ALFRED | WAH-NL | 说明 |
+|---|---|---|---|
+| `success_rate_pct` | ✓ | — | 任务完成率（%） |
+| `avg_goal_success_rate` | — | ✓ | 目标条件满足率 |
+| `avg_subgoal_success_rate` | — | ✓ | 子目标满足率（0–1） |
+| `avg_replan_count` | ✓ | ✓ | 平均重规划次数 |
+| `avg_tree_max_depth` | ✓ | ✓ | 平均树展开深度 |
+| `lineage_stability` | ✓ | ✓ | lineage_id 跨 revision 稳定性（AstroPlan 特有） |
+
+### 快速开始
+
+```bash
+# 1. 配置（编辑 config/eval_config.yaml 选择 backend 和 dataset）
+#    默认：WAH-NL + Ollama llama3.1:8b
+
+# 2. 运行（mock 模式，无需模拟器）
+python -m src.evaluation.evaluator --config config/eval_config.yaml
+# 在 eval_config.yaml 中设置 backend.backend: mock
+
+# 3. 完整 WAH-NL 评测（需 VirtualHome + Ollama）
+ollama serve &
+python -m src.evaluation.evaluator --config config/eval_config.yaml
+```
+
+结果保存至 `outputs/eval/metrics.json` 和 `per_task.json`。
+
+### 与 ReAcTree 的设计差异
+
+| 维度 | ReAcTree | AstroPlan |
+|---|---|---|
+| env 注入方式 | 节点构造时绑定（有状态节点） | `EnvMCPBridge` 经 MCPRegistry 注入（节点无状态） |
+| LLM 生成约束 | `guidance.select`（受限解码） | JSON 解析 + 降级（无 `guidance` 依赖） |
+| 节点调用参数 | 6 个位置参数 | `NodeRunContext` + 2 个标量 |
+| 指标命名 | `success_rate`, `goal_success_rate` | 同名，可直接对比 |
+
+---
+
 ## 依赖
 
+**核心（必须）**
 ```
 pyyaml>=6.0
 websockets>=11.0
-anthropic>=0.20.0   # 仅真实 LLM 路径需要
-numpy>=1.24.0       # MilestoneEngine 向量检索
 ```
 
-> Mock 规划器模式下仅需 `pyyaml` 和 `websockets`。
+**可选 — 真实 LLM**
+```
+anthropic>=0.20.0        # Anthropic Claude
+transformers>=4.44.0     # HuggingFace 本地推理
+accelerate>=0.34.0       # HF 多卡分布
+bitsandbytes             # 8-bit 量化（可选）
+```
+
+**可选 — 基准评测环境**
+```
+ai2thor==2.1.0           # ALFRED 模拟器
+# VirtualHome 通过 git submodule 安装：
+# cd ReAcTree && git submodule update --init virtualhome && pip install -e virtualhome/
+```
+
+**可选 — 其他**
+```
+numpy>=1.24.0            # MilestoneEngine 向量检索
+```
+
+> Mock 规划器 + Mock 环境模式下仅需 `pyyaml`。

@@ -172,18 +172,19 @@ class AstroPlan:
 
         # Run the agent tree (plan_mode=True — only writes to DAGBuilder)
         from src.cognition.agent_node import AgentNode
+        from src.types import NodeRunContext
         root = AgentNode(node_id="root", llm_client=self._llm, depth=0)
         root.goal = request.mission_context
 
         context = mem.snapshot()
-        await root.run(
+        log: list = []
+        rctx = NodeRunContext(
             context=context,
-            step_id=1,
-            decision_id=1,
-            log=[],
+            log=log,
             max_depth=self._env._max_depth,
             env=self._env,
         )
+        await root.run(rctx, step_id=1, decision_id=1)
 
         response = self._env._dag.to_plan_response(revision_id=revision_id)
 
