@@ -1,8 +1,14 @@
-"""AstroPlan — entry point.
+"""AstroPlan — standalone entry point.
 
-Runs a Fluid-Lab-Demo mission using the mock planner (no LLM API key
-required).  Set ANTHROPIC_API_KEY in the environment to activate the
-real LLM planning path.
+Demonstrates the real plan → MockScheduler execute loop:
+
+  1. AstroPlan.plan()           generates a PlanResponse DAG (dry-run)
+  2. MockScheduler.submit_plan() accepts the DAG
+  3. MockScheduler.await_terminal_event() executes each node via MCPRegistry
+  4. On failure → AstroPlan.plan() replans; loop repeats
+
+Set ANTHROPIC_API_KEY to enable real LLM planning; otherwise the built-in
+rule-based fallback in AgentNode is used (no external services required).
 
 Usage::
 
@@ -17,19 +23,10 @@ from src.core.config_loader import load_config
 from src.physics.interlock_engine import InterlockEngine
 from src.execution.task_ingestor import TaskDataset
 from src.execution.telemetry_bus import TelemetryBus
-from src.execution.hardware_executor import HardwareExecutor
 from src.memory.working_memory import WorkingMemory
-from src.memory.milestone_engine import MilestoneEngine
-from src.control.output_controller import OutputController
-from src.cognition.agent_node import AgentNode
-from src.cognition.control_flow import ControlFlowNode
-from src.cognition.replanner import SubTreeReplanner
-from src.cognition.latency_observer import LatencyObserver
-from src.application.ground_command_receiver import GroundCommandReceiver
-from src.application.hitl_operator import HITLSuspensionOperator
-from src.application.web_monitor import WebMonitor
 from src.core.mcp_registry import MCPRegistry
-from src.core.environment import LaboratoryEnvironment
+from src.planner import AstroPlan
+from src.evaluation import MockScheduler
 
 
 def _make_llm_client(cfg):
@@ -56,7 +53,7 @@ def _make_llm_client(cfg):
         print(f"[main] LLM client ready: {model}")
         return _Client()
     except ImportError:
-        print("[main] anthropic package not installed — using mock planner.")
+        print("[main] anthropic package not installed — using built-in planner.")
         return None
 
 
@@ -66,7 +63,12 @@ def _register_demo_skills(
     interlock: InterlockEngine,
     telemetry_bus: TelemetryBus,
 ) -> None:
-    """Register Fluid-Lab-Demo skills in the MCP registry."""
+    """Register Fluid-Lab-Demo skills in the MCP registry.
+
+    These skills are invoked by MockScheduler when it executes plan nodes.
+    Side-effects (FSM transitions, telemetry updates) happen here, not
+    during planning (plan_mode=True skips all dispatch).
+    """
 
     @registry.mcp_tool
     def activate_pump(params: dict) -> dict:
@@ -96,14 +98,14 @@ def _register_demo_skills(
 async def main() -> None:
     cfg = load_config()
     lab_id: str = cfg.lab_id
-    bandwidth: int = cfg.bandwidth_kbps
 
-    # --- Layer 1: Environment & Execution ---
+    # --- Task ---
     ingestor = TaskDataset.parse_requirements(
         "进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。"
     )
     nl_goal = ingestor.nl_global_goal
 
+    # --- Telemetry bus (for skill side-effects) ---
     telemetry_bus = TelemetryBus(
         lab_id=lab_id,
         rules={
@@ -116,14 +118,10 @@ async def main() -> None:
         {"temperature": 20.0, "flow_rate": 0.0, "camera_status": "OFF"}
     )
 
-    hardware_executor = HardwareExecutor(
-        bandwidth_kbps=bandwidth, lab_id=lab_id
-    )
-
-    # --- Layer 2: Physics ---
+    # --- Physics ---
     interlock = InterlockEngine.from_yaml("config/fsm_rules.yaml", lab_id=lab_id)
 
-    # --- Layer 3: Memory & Output ---
+    # --- Shared working memory (used by skill side-effects via registry) ---
     working_memory = WorkingMemory(lab_id=lab_id)
     working_memory.update_telemetry(
         {"temperature": 20.0, "flow_rate": 0.0, "camera_status": "OFF"}
@@ -131,71 +129,28 @@ async def main() -> None:
     for subsystem in ("fluid_pump", "thermal", "camera"):
         working_memory.update_subsystem_state(subsystem, "IDLE")
 
-    milestone_engine = MilestoneEngine()
-    milestone_engine.build_index(
-        [
-            {
-                "goal": "流体实验",
-                "trajectory": [
-                    {"skill": "activate_pump", "params": {}},
-                    {"skill": "heat_to_40", "params": {}},
-                    {"skill": "activate_camera", "params": {}},
-                ],
-            }
-        ]
-    )
-
-    output_controller = OutputController(
-        compress=cfg.mcp.compress
-    )
-
-    # --- Layer 4: Cognition ---
-    llm_client = _make_llm_client(cfg)
-    agent_node = AgentNode(node_id="root", llm_client=llm_client)
-    control_flow_node = ControlFlowNode(control_type="Sequence")
-    replanner = SubTreeReplanner(
-        max_depth=cfg.orchestrator.max_replan_depth,
-        agent_node=agent_node,
-    )
-    latency_observer = LatencyObserver(
-        threshold_ms=cfg.orchestrator.latency_threshold_ms,
-    )
-
-    # --- Layer 5: Application ---
-    gcr = GroundCommandReceiver()
-    hitl = HITLSuspensionOperator(
-        timeout_s=cfg.orchestrator.hitl_timeout_s
-    )
-    monitor = WebMonitor(
-        host=cfg.web_monitor.host,
-        port=cfg.web_monitor.port,
-        enabled=cfg.web_monitor.enabled,
-    )
-
-    # --- MCP skill registration ---
+    # --- MCP skill registry ---
     mcp = MCPRegistry(compress=cfg.mcp.compress)
     _register_demo_skills(mcp, working_memory, interlock, telemetry_bus)
 
-    # --- Orchestrator ---
-    env = LaboratoryEnvironment(
-        lab_id=lab_id,
-        interlock_engine=interlock,
-        working_memory=working_memory,
-        agent_node=agent_node,
-        control_flow_node=control_flow_node,
-        replanner=replanner,
-        latency_observer=latency_observer,
-        hardware_executor=hardware_executor,
-        output_controller=output_controller,
-        milestone_engine=milestone_engine,
-        ground_cmd_receiver=gcr,
-        hitl_operator=hitl,
-        web_monitor=monitor,
-        mcp_registry=mcp,
-    )
+    # --- Planner ---
+    llm_client = _make_llm_client(cfg)
+    planner = AstroPlan(cfg, interlock, mcp, llm_client=llm_client)
 
-    result = await env.run(nl_goal)
-    print(f"执行结果: {{'status': '{result.status}', 'total_steps': {result.total_steps}, 'execution_log': [...]}}")
+    # --- Mock Scheduler (simulates agentos_scheduler execution) ---
+    # failure_rate=0.0 → deterministic success; raise to stress-test replanning
+    scheduler = MockScheduler(mcp, failure_rate=0.0)
+
+    # --- Run ---
+    print(f"\n[{lab_id}] Mission: {nl_goal}\n")
+    result = await planner.execute_standalone(nl_goal, scheduler=scheduler)
+
+    print(f"\n[{lab_id}] 执行结果:")
+    print(f"  status       : {result.status}")
+    print(f"  total_steps  : {result.total_steps}")
+    print(f"  revisions    : {scheduler.submitted_revisions}")
+    print(f"  nodes run    : {scheduler.total_nodes_executed}")
+    print(f"  failures     : {scheduler.total_failures}")
 
 
 if __name__ == "__main__":

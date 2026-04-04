@@ -2,10 +2,11 @@
 
 **面向太空实验室的科学任务规划与重规划智能体**
 
-- Python 3.10+ 
+- Python 3.10+
 - 层次化动态智能体树
 - 物理联锁 FSM
 - 人机协同 HITL
+- 调度器集成接口（`IPlannerService` / `ISchedulerAdapter`）
 
 ---
 
@@ -18,6 +19,8 @@
 - **MCP 技能注册表**：`@mcp_tool` 装饰器注册执行技能，SpaceWire 带宽感知压缩
 - **地面指令接收 / HITL 挂起**：支持抢占式任务与人工审核不可逆操作
 - **Web 监控**：WebSocket SSE 实时推送计划树视图
+- **调度器接口**：`IPlannerService` + `ISchedulerAdapter` 定义 AstroPlan ↔ agentos_scheduler 的显式边界
+- **独立评测**：`MockScheduler` 无需真实调度器即可运行完整规划–执行–重规划循环
 
 ---
 
@@ -26,16 +29,28 @@
 ```
 AstroPlan/
 ├── config/
-│   ├── config.yaml          # LLM / MCP / 编排器全局配置
-│   └── fsm_rules.yaml       # 物理联锁有限状态机规则表
-├── requirements.txt         # 依赖声明
-├── main.py                  # 入口脚本 (asyncio.run)
+│   ├── config.yaml              # LLM / MCP / 编排器全局配置
+│   └── fsm_rules.yaml           # 物理联锁有限状态机规则表
+├── requirements.txt
+├── main.py                      # 独立演示入口 (asyncio.run)
 └── src/
-    ├── types.py             # 全部强类型数据类（禁止裸 dict 跨边界传递）
+    ├── types.py                 # 全部强类型数据类（禁止裸 dict 跨边界传递）
+    │
+    ├── planner.py               # ★ AstroPlan — IPlannerService 实现（公开 API）
+    │
+    ├── interfaces/              # ★ 调度器交互显式接口
+    │   ├── __init__.py          #   统一 re-export
+    │   ├── planner_service.py   #   IPlannerService Protocol
+    │   └── scheduler_adapter.py #   ISchedulerAdapter, IStatusReporter, ExecutionSnapshot
+    │
+    ├── evaluation/              # ★ 独立评测工具
+    │   ├── __init__.py
+    │   └── mock_scheduler.py    #   MockScheduler — ISchedulerAdapter 的本地模拟实现
+    │
     ├── core/
-    │   ├── config_loader.py # load_config() → AppConfig
-    │   ├── mcp_registry.py  # MCPRegistry + @mcp_tool 装饰器
-    │   └── environment.py   # LaboratoryEnvironment 顶层编排器
+    │   ├── config_loader.py     # load_config() → AppConfig
+    │   ├── mcp_registry.py      # MCPRegistry + @mcp_tool 装饰器
+    │   └── environment.py       # LaboratoryEnvironment（含 plan_mode 标志）
     ├── physics/
     │   └── interlock_engine.py  # InterlockEngine (FSM + 联锁校验)
     ├── execution/
@@ -46,16 +61,221 @@ AstroPlan/
     │   ├── working_memory.py    # WorkingMemory → SharedContext
     │   └── milestone_engine.py  # MilestoneEngine (离线索引 / 在线检索)
     ├── control/
+    │   ├── dag_builder.py       # DAGBuilder（含控制流感知 API + to_plan_response()）
     │   └── output_controller.py # OutputController (序列化 / 树视图格式化)
     ├── cognition/
-    │   ├── agent_node.py        # AgentNode.execute_decision()
-    │   ├── control_flow.py      # ControlFlowNode.evaluate_children()
-    │   ├── replanner.py         # SubTreeReplanner.replan()
-    │   └── latency_observer.py  # LatencyObserver (时延预估 / 抢占决策)
+    │   ├── agent_node.py        # AgentNode（plan_mode 感知）
+    │   ├── control_flow.py      # ControlFlowNode（Sequence / Fallback / Parallel）
+    │   ├── replanner.py         # SubTreeReplanner
+    │   └── latency_observer.py  # LatencyObserver
     └── application/
-        ├── ground_command_receiver.py  # GroundCommandReceiver
-        ├── hitl_operator.py            # HITLSuspensionOperator
-        └── web_monitor.py              # WebMonitor (WebSocket SSE)
+        ├── ground_command_receiver.py
+        ├── hitl_operator.py
+        └── web_monitor.py       # WebMonitor（实现 IStatusReporter）
+```
+
+★ = 本次架构重构新增或重大扩展
+
+---
+
+## 调度器集成接口
+
+### IPlannerService（`src/interfaces/planner_service.py`）
+
+AstroPlan 对外暴露的服务接口。agentos_scheduler 通过此接口调用规划器。
+
+```python
+from src.interfaces import IPlannerService
+
+class AstroPlan:          # 位于 src/planner.py，满足 IPlannerService Protocol
+    async def plan(self, request: PlanRequest) -> PlanResponse: ...
+    async def execute_standalone(self, mission: str, *, scheduler=None, reporter=None) -> ExecutionResult: ...
+```
+
+**交互模型（拉取式）**
+
+```
+Scheduler ──POST /planner/plan──▶ AstroPlan.plan(PlanRequest)
+                                        │
+                               ◀── PlanResponse ──
+```
+
+AstroPlan 在 `plan()` 调用期间不主动回调调度器；监控钩子由可选的 `IStatusReporter` 处理。
+
+### ISchedulerAdapter（`src/interfaces/scheduler_adapter.py`）
+
+AstroPlan 在独立模式下调用的执行环境接口。集成模式由真实调度器适配器实现，独立模式由 `MockScheduler` 实现。
+
+```python
+class ISchedulerAdapter(Protocol):
+    async def submit_plan(self, response: PlanResponse) -> None: ...
+    async def get_execution_snapshot(self, revision_id: str) -> ExecutionSnapshot: ...
+    async def await_terminal_event(self) -> ExecutionSnapshot: ...
+```
+
+### IStatusReporter（`src/interfaces/scheduler_adapter.py`）
+
+可选监控钩子，AstroPlan 在规划关键事件时调用。`WebMonitor` 可实现此接口接收 SSE 推送。
+
+```python
+class IStatusReporter(Protocol):
+    async def on_plan_generated(self, response: PlanResponse) -> None: ...
+    async def on_replan_triggered(self, failed_lineage: str, current_revision_id: str) -> None: ...
+    async def on_mission_completed(self, result: ExecutionResult) -> None: ...
+```
+
+---
+
+## 核心数据类型（`src/types.py`）
+
+| 类型 | 用途 |
+|---|---|
+| `PlanNode` | 规划 DAG 的一个节点（含 `lineage_id` / `required_roles` / `tool_hints` / `interruptible`） |
+| `PlanRequest` | POST /planner/plan 请求体（初次规划或重规划快照） |
+| `PlanResponse` | AstroPlan 返回的完整 DAG（`revision_id` + `nodes` + `edges`） |
+| `ExecutionNodeRef` | 节点执行状态引用（Scheduler → AstroPlan，用于重规划） |
+| `NodeStatus` | 节点生命周期枚举：`PENDING / RUNNING / COMPLETED / FAILED / SKIPPED` |
+| `ExecutionSnapshot` | `ISchedulerAdapter` 返回的执行状态快照 |
+| `SharedContext` | 智能体树内全局观察状态（单一数据源） |
+| `AgentDecision` | AgentNode 输出（Think / Act / Expand） |
+| `EventTriggerSignal` | 重规划触发信号（统一来源：地面指令 / 遥测 / HITL） |
+| `ExecutionResult` | 任务最终结果（status / steps / log） |
+
+---
+
+## 执行流程（MVP）
+
+```
+main.py
+  │
+  ├─ InterlockEngine.from_yaml()      物理联锁 FSM
+  ├─ MCPRegistry + _register_demo_skills()   技能注册（含真实副作用）
+  ├─ AstroPlan(cfg, interlock, registry)     规划器
+  └─ MockScheduler(registry)                 本地执行模拟器
+       │
+       └─ planner.execute_standalone(mission)
+              │
+              ▼
+         AstroPlan.plan(PlanRequest)         plan_mode=True（干跑）
+              │  AgentNode 树决策
+              │  DAGBuilder 累积动作
+              ▼
+         PlanResponse(revision_id, nodes, edges)
+              │
+              ▼
+         MockScheduler.submit_plan()         接收 DAG
+              │
+              ▼
+         MockScheduler.await_terminal_event()
+              │  按拓扑顺序执行前沿节点
+              │  registry.call(skill, params) → 真实副作用
+              │
+              ├── 全部成功 → ExecutionResult(completed)
+              │
+              └── 某节点失败 → ExecutionSnapshot(failed=[...])
+                       │
+                       └─ AstroPlan.plan(replan PlanRequest)  → 新 revision
+                                │
+                                └─ ... 循环直至成功或超出 max_replan_depth
+```
+
+## plan_mode 标志
+
+`LaboratoryEnvironment.plan_mode: bool`，由 `AstroPlan` 在每次 `plan()` 调用前设置：
+
+| 模式 | 值 | `AgentNode._execute_action()` 行为 |
+|---|---|---|
+| 规划（干跑） | `True` | 跳过 MCP/HW 派发，仅调用 `dag.register_action()`，返回 `True` |
+| 执行（MockScheduler） | `False`（默认） | MockScheduler 直接调用 `registry.call(skill, params)` |
+
+> **注意**：执行阶段由 MockScheduler 负责，不经过 `LaboratoryEnvironment.run()`。`plan_mode=False` 在 `execute_standalone()` 中不激活旧执行路径；它仅保留给将来 AstroPlan 独立运行（不使用 MockScheduler）的场景。
+
+---
+
+## DAGBuilder 控制流感知 API
+
+`DAGBuilder` 新增控制流上下文支持，以正确编码 Parallel / Fallback 语义：
+
+```python
+dag = DAGBuilder(revision_id="rev_001", mission_id="mission_abc")
+
+# Sequence（默认）：线性链
+dag.set_context("sequence")
+dag.register_action("activate_pump", {}, "fluid_pump", lineage_id="abc123")
+
+# Parallel：扇出，共享前驱
+dag.set_context("parallel", parallel_predecessor="act_1")
+dag.register_action("heat_to_40",     {}, "thermal", lineage_id="def456")
+dag.register_action("activate_camera", {}, "camera", lineage_id="ghi789")
+
+# Fallback：仅注册第一备选
+dag.set_context("fallback")
+dag.register_action("primary_skill", {}, "sys_a", lineage_id="jkl012")
+dag.register_action("backup_skill",  {}, "sys_a", lineage_id="mno345")  # 被丢弃
+
+# 生成 PlanResponse
+response = dag.to_plan_response()   # 含 validate()（拓扑排序）
+```
+
+---
+
+## 独立评测
+
+无需真实调度器或 Worker 即可运行完整规划–执行–重规划循环：
+
+```python
+from src.planner import AstroPlan
+from src.evaluation import MockScheduler
+from src.core.config_loader import load_config
+from src.physics.interlock_engine import InterlockEngine
+from src.core.mcp_registry import MCPRegistry
+
+cfg      = load_config()
+interlock = InterlockEngine.from_yaml("config/fsm_rules.yaml", cfg.lab_id)
+registry = MCPRegistry()
+planner  = AstroPlan(cfg, interlock, registry)
+
+# 无故障基线
+result = await planner.execute_standalone("进行流体实验...")
+
+# 含人工故障注入（30% 概率）的压力测试
+scheduler = MockScheduler(registry, failure_rate=0.3, seed=42)
+result = await planner.execute_standalone("进行流体实验...", scheduler=scheduler)
+
+metrics = {
+    "status":           result.status,
+    "total_steps":      result.total_steps,
+    "replan_count":     scheduler.total_failures,
+    "nodes_executed":   scheduler.total_nodes_executed,
+}
+```
+
+---
+
+## 集成工作流（调度器 ↔ AstroPlan）
+
+```
+1. Scheduler 收到任务指令
+
+2. Scheduler 调用 AstroPlan：
+   POST /planner/plan {mission_context: "...", current_revision_id: null, ...}
+   → PlanResponse(revision_id="rev_001", nodes=[...], edges=[...])
+
+3. Scheduler 将 PlanResponse 转换为内部 DAGTaskGraph 并提交执行
+
+4. Workers 执行前沿节点；Scheduler 追踪 completed / running / failed
+
+5. 节点失败时：
+   Scheduler 再次调用 AstroPlan，附带执行状态快照：
+   POST /planner/plan {
+     mission_context: "...",
+     current_revision_id: "rev_001",
+     completed_nodes: [...],
+     failed_nodes: [{node_id: "rev001_n3", lineage_id: "activate_camera", error: "..."}]
+   }
+   → PlanResponse(revision_id="rev_002", ...)  ← 冻结已完成节点，重建失败子树
+
+6. Scheduler 用新 DAG 继续执行，直至全部完成
 ```
 
 ---
@@ -70,16 +290,14 @@ pip install -r requirements.txt
 
 ### 2. 配置（可选）
 
-编辑 `config/config.yaml` 调整 LLM 模型或设置 API Key：
+编辑 `config/config.yaml`：
 
 ```yaml
 llm:
   model: "claude-sonnet-4-6"
-  api_key: "${ANTHROPIC_API_KEY}"  # 或直接填写
-  use_mock: false                   # true = 不调用 LLM，使用内置 Mock 规划器
+  api_key: "${ANTHROPIC_API_KEY}"
+  use_mock: false   # 无 API Key 时自动回退内置规划逻辑
 ```
-
-不设置 API Key 时系统自动退回 Mock 规划器，无需任何外部服务即可运行。
 
 ### 3. 运行演示
 
@@ -87,78 +305,24 @@ llm:
 python main.py
 ```
 
-**预期输出（Fluid-Lab-Demo）：**
+**预期输出（Fluid-Lab-Demo，无 LLM）：**
 
 ```
-[Fluid-Lab-Demo] 遥测更新: fluid_pump None → IDLE
-[Fluid-Lab-Demo] 遥测更新: thermal None → IDLE
-[Fluid-Lab-Demo] 遥测更新: camera None → IDLE
-[Fluid-Lab-Demo] Mission start: 进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。
-[Fluid-Lab-Demo] 🧠 Planner: 生成 3 步计划
-    步骤 1: {'skill': 'activate_pump', 'params': {}}
-    步骤 2: {'skill': 'heat_to_40', 'params': {}}
-    步骤 3: {'skill': 'activate_camera', 'params': {}}
-[Fluid-Lab-Demo] 🔄 子系统 'fluid_pump': IDLE → ACTIVE
-[Fluid-Lab-Demo] 遥测更新: flow_rate 0.0 → 15.0
-[Fluid-Lab-Demo] 🔄 子系统 'thermal': IDLE → HEATING
-[Fluid-Lab-Demo] 遥测更新: temperature 20.0 → 40.0
-[Fluid-Lab-Demo] 🔄 子系统 'camera': IDLE → ACTIVE
-[Fluid-Lab-Demo] 遥测更新: camera_status OFF → RECORDING
-执行结果: {'status': 'completed', 'total_steps': 3, 'execution_log': [...]}
+[Fluid-Lab-Demo] Mission: 进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。
+
+[AstroPlan] rev_001: 3 node(s), 2 edge(s)
+[MockScheduler] Accepted rev_001: 3 node(s)
+[MockScheduler] ✓ activate_pump  (lineage=<hash>)
+[MockScheduler] ✓ heat_to_40     (lineage=<hash>)
+[MockScheduler] ✓ activate_camera (lineage=<hash>)
+
+[Fluid-Lab-Demo] 执行结果:
+  status       : completed
+  total_steps  : 3
+  revisions    : ['rev_001']
+  nodes run    : 3
+  failures     : 0
 ```
-
----
-
-## 核心数据流
-
-```
-raw_requirements
-    │
-    ▼
-TaskDataset.parse_requirements()          # Layer 1: 任务解析
-    │  nl_global_goal: str
-    ▼
-LaboratoryEnvironment.run()               # Layer 4: 编排器
-    ├─ WorkingMemory.snapshot() → SharedContext
-    ├─ AgentNode.execute_decision()        # LLM / Mock 规划
-    │      ↳ _expand_to_steps()           # 迭代生成完整步骤序列
-    └─ for step in plan:
-           ├─ InterlockEngine.validate_action()   # 物理安全门
-           ├─ MCPRegistry.call(skill)             # 执行技能
-           ├─ WorkingMemory.update_*()            # 更新状态
-           ├─ OutputController.format_tree()      # 序列化树视图
-           └─ WebMonitor.broadcast()             # 推送监控 UI
-```
-
----
-
-## 重规划机制
-
-| 触发条件 | 路径 |
-|---|---|
-| 步骤执行失败 | `EventTriggerSignal(source="step_failed")` → `SubTreeReplanner.replan()` |
-| 遥测超阈值 | `TelemetryBus.check_threshold()` → `DeviationEvent` → replanner |
-| 地面抢占指令 | `GroundCommandReceiver` → `LatencyObserver.should_preempt()` → 从头重规划 |
-| 人工审核 | `HITLSuspensionOperator` 挂起执行流，等待 `InterventionSignal` |
-
----
-
-## 联锁规则配置
-
-`config/fsm_rules.yaml` 定义每个子系统的合法状态转换：
-
-```yaml
-subsystems:
-  fluid_pump:
-    initial_state: IDLE
-    transitions:
-      activate_pump:
-        from: IDLE
-        to: ACTIVE
-        requires: {}           # 无前置依赖
-```
-
-新增实验设备只需在 `config/fsm_rules.yaml` 添加条目，无需修改代码。
 
 ---
 
@@ -174,9 +338,25 @@ def centrifuge_spin(params: dict) -> dict:
     return {"status": "ok", "rpm": params.get("rpm", 3000)}
 ```
 
-**接入真实 LLM：**
+**实现真实调度器适配器：**
 
-在 `config/config.yaml` 中设置 `use_mock: false` 并提供 `ANTHROPIC_API_KEY`，`AgentNode` 自动切换到真实推理路径。
+```python
+from src.interfaces import ISchedulerAdapter, ExecutionSnapshot
+from src.types import PlanResponse
+
+class AgentOSSchedulerAdapter:
+    """Wraps agentos_scheduler HTTP API as ISchedulerAdapter."""
+
+    async def submit_plan(self, response: PlanResponse) -> None:
+        await http_client.post("/dag/submit", json=response_to_dict(response))
+
+    async def get_execution_snapshot(self, revision_id: str) -> ExecutionSnapshot:
+        data = await http_client.get(f"/dag/snapshot/{revision_id}")
+        return parse_snapshot(data)
+
+    async def await_terminal_event(self) -> ExecutionSnapshot:
+        return await websocket_client.wait_for_terminal()
+```
 
 ---
 

@@ -6,6 +6,16 @@ Wires all layers together and drives the main execution loop:
   3. Run the hierarchical agent tree (recursive)
   4. Dispatch actions through the output pipeline
   5. Monitor for deviations and trigger replanning
+
+plan_mode flag
+--------------
+When plan_mode=True (set by AstroPlan.plan()), AgentNode._execute_action()
+skips all MCP / hardware dispatch and only registers actions in DAGBuilder.
+This produces a complete DAG without side-effects (dry-run).
+
+When plan_mode=False (default, and set by AstroPlan.execute_standalone()),
+the normal execution path is used: skills are dispatched through MCPRegistry
+and hardware is driven via HardwareExecutor.
 """
 from __future__ import annotations
 
@@ -22,6 +32,11 @@ class LaboratoryEnvironment:
 
     Instantiate this class, register MCP skills, then call
     ``asyncio.run(env.run(goal))``.
+
+    In integrated mode, LaboratoryEnvironment is constructed and owned by
+    AstroPlan; external callers should use the AstroPlan.plan() /
+    AstroPlan.execute_standalone() API instead of instantiating this class
+    directly.
     """
 
     def __init__(
@@ -41,6 +56,7 @@ class LaboratoryEnvironment:
         web_monitor: Any,
         mcp_registry: Any,
         max_depth: int = 10,
+        plan_mode: bool = False,
     ):
         self.lab_id = lab_id
         self._interlock = interlock_engine
@@ -57,6 +73,10 @@ class LaboratoryEnvironment:
         self._monitor = web_monitor
         self._mcp = mcp_registry
         self._max_depth = max_depth
+
+        # plan_mode=True → AgentNode._execute_action() skips MCP/HW dispatch,
+        # registers only in DAGBuilder (dry-run for plan generation).
+        self.plan_mode: bool = plan_mode
 
         self._running = False
         # Flat plan kept for legacy monitor/replanner compatibility

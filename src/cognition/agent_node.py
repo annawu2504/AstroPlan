@@ -277,6 +277,34 @@ class AgentNode:
         skill = action.get("skill", "noop")
         params = action.get("params", {})
 
+        # ------------------------------------------------------------------
+        # plan_mode=True: dry-run — register in DAG only, no dispatch
+        # ------------------------------------------------------------------
+        if getattr(env, 'plan_mode', False):
+            import hashlib as _hl
+            subsystem = env._skill_to_subsystem(skill)
+            lineage_id = _hl.sha256(f"{env.lab_id}::{skill}".encode()).hexdigest()[:12]
+            env._dag.register_action(
+                skill=skill,
+                params=params,
+                subsystem=subsystem,
+                status="pending",
+                lineage_id=lineage_id,
+            )
+            env._memory.log_action({"skill": skill, "params": params, "subsystem": subsystem})
+            log.append({
+                "type": "action",
+                "node_id": self.node_id,
+                "skill": skill,
+                "params": params,
+                "status": "planned",
+            })
+            return True
+
+        # ------------------------------------------------------------------
+        # plan_mode=False: normal execution path
+        # ------------------------------------------------------------------
+
         # Interlock check
         try:
             env._interlock.validate_action(skill)
