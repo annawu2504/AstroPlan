@@ -10,7 +10,7 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
-from src.types import AgentDecision, Milestone, SharedContext, TreeExecutionResult
+from src.types import AgentDecision, Milestone, NodeRunContext, SharedContext, TreeExecutionResult
 
 
 class AgentNode:
@@ -163,35 +163,26 @@ class AgentNode:
 
     async def run(
         self,
-        context: SharedContext,
+        rctx: NodeRunContext,
         step_id: int,
         decision_id: int,
-        log: List[Dict[str, Any]],
-        max_depth: int,
-        env: Any,
     ) -> TreeExecutionResult:
         """Execute this agent node recursively.
 
         Parameters
         ----------
-        context:
-            Current shared observation state
+        rctx:
+            Per-call invariants: world-state context, log, max_depth, env.
         step_id:
-            Current step counter (incremented for each Act)
+            Current step counter (incremented for each Act).
         decision_id:
-            Current decision counter (incremented for each Think/Act/Expand)
-        log:
-            Execution log to append events to
-        max_depth:
-            Maximum recursion depth to prevent infinite expansion
-        env:
-            Reference to LaboratoryEnvironment for action execution
+            Current decision counter (incremented for each Think/Act/Expand).
 
         Returns
         -------
-        TreeExecutionResult with success status and updated counters
+        TreeExecutionResult with success status and updated counters.
         """
-        if self.depth > max_depth:
+        if self.depth > rctx.max_depth:
             return TreeExecutionResult(
                 success=False,
                 step_id=step_id,
@@ -202,14 +193,14 @@ class AgentNode:
         # Get decision from planner
         decision = self.execute_decision(
             sub_goal=self.goal if self.goal else "complete mission",
-            context=context,
+            context=rctx.context,
             milestones=[],
         )
         decision_id += 1
 
         if decision.skill == "Think":
             # Just reasoning, no action
-            log.append({
+            rctx.log.append({
                 "type": "think",
                 "node_id": self.node_id,
                 "reasoning": decision.reasoning,
@@ -219,7 +210,7 @@ class AgentNode:
 
         elif decision.skill == "Act":
             # Execute atomic action
-            success = await self._execute_action(decision.action, env, log)
+            success = await self._execute_action(decision.action, rctx)
             step_id += 1
             return TreeExecutionResult(success=success, step_id=step_id, decision_id=decision_id)
 
@@ -228,7 +219,7 @@ class AgentNode:
             control_flow = decision.action.get("control_flow", "Sequence")
             subgoals = decision.action.get("subgoals", [])
 
-            log.append({
+            rctx.log.append({
                 "type": "expand",
                 "node_id": self.node_id,
                 "control_flow": control_flow,
@@ -251,13 +242,13 @@ class AgentNode:
                 cf_node.children.append(child_agent)
 
             # Delegate to sub-tree
-            return await cf_node.run(context, step_id, decision_id, log, max_depth, env)
+            return await cf_node.run(rctx, step_id, decision_id)
 
         # Unknown skill type
         return TreeExecutionResult(success=False, step_id=step_id, decision_id=decision_id)
 
     async def _execute_action(
-        self, action: Dict[str, Any], env: Any, log: List[Dict[str, Any]]
+        self, action: Dict[str, Any], rctx: NodeRunContext
     ) -> bool:
         """Execute a single atomic action via the environment's execution pipeline.
 
@@ -265,15 +256,15 @@ class AgentNode:
         ----------
         action:
             Action dict with 'skill' and 'params' keys
-        env:
-            Reference to LaboratoryEnvironment
-        log:
-            Execution log to append to
+        rctx:
+            Per-call run context (env, log, etc.).
 
         Returns
         -------
         True if action succeeded, False otherwise
         """
+        env = rctx.env
+        log = rctx.log
         skill = action.get("skill", "noop")
         params = action.get("params", {})
 

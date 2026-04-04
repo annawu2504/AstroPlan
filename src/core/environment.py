@@ -24,7 +24,7 @@ from typing import Any, Dict, List
 
 from src.cognition.agent_node import AgentNode
 from src.control.dag_builder import DAGBuilder
-from src.types import ExecutionResult
+from src.types import ExecutionResult, NodeRunContext
 
 
 class LaboratoryEnvironment:
@@ -107,18 +107,12 @@ class LaboratoryEnvironment:
 
         context = self._memory.snapshot()
         log: List[Dict[str, Any]] = []
+        rctx = NodeRunContext(context=context, log=log, max_depth=self._max_depth, env=self)
 
         print(f"[{self.lab_id}] 🧠 Planner: 开始递归树规划 (max_depth={self._max_depth})")
 
         # Execute the hierarchical tree
-        tree_result = await root.run(
-            context=context,
-            step_id=1,
-            decision_id=1,
-            log=log,
-            max_depth=self._max_depth,
-            env=self,
-        )
+        tree_result = await root.run(rctx, step_id=1, decision_id=1)
 
         self._running = False
 

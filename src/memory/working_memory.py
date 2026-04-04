@@ -5,6 +5,7 @@ SharedContext object that all agent nodes read from.
 """
 from __future__ import annotations
 
+import copy
 import time
 from typing import Any, Dict, List
 
@@ -56,6 +57,6 @@ class WorkingMemory:
             lab_id=self._lab_id,
             telemetry=dict(self._telemetry),
             subsystem_states=dict(self._subsystem_states),
-            action_log=list(self._action_log),
+            action_log=[copy.deepcopy(entry) for entry in self._action_log],
             timestamp=int(time.time() * 1000),
         )

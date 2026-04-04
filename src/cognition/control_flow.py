@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List
 
-from src.types import EventTriggerSignal, SharedContext, TreeExecutionResult
+from src.types import EventTriggerSignal, NodeRunContext, SharedContext, TreeExecutionResult
 
 
 class ControlFlowNode:
@@ -46,35 +46,26 @@ class ControlFlowNode:
 
     async def run(
         self,
-        context: SharedContext,
+        rctx: NodeRunContext,
         step_id: int,
         decision_id: int,
-        log: List[Dict[str, Any]],
-        max_depth: int,
-        env: Any,
     ) -> TreeExecutionResult:
         """Execute children according to control flow strategy.
 
         Parameters
         ----------
-        context:
-            Current shared observation state
+        rctx:
+            Per-call invariants: world-state context, log, max_depth, env.
         step_id:
-            Current step counter (incremented for each Act)
+            Current step counter (incremented for each Act).
         decision_id:
-            Current decision counter (incremented for each Think/Act/Expand)
-        log:
-            Execution log to append events to
-        max_depth:
-            Maximum recursion depth to prevent infinite expansion
-        env:
-            Reference to LaboratoryEnvironment for action execution
+            Current decision counter (incremented for each Think/Act/Expand).
 
         Returns
         -------
-        TreeExecutionResult with success status and updated counters
+        TreeExecutionResult with success status and updated counters.
         """
-        if self.depth > max_depth:
+        if self.depth > rctx.max_depth:
             return TreeExecutionResult(
                 success=False,
                 step_id=step_id,
@@ -82,9 +73,41 @@ class ControlFlowNode:
                 terminate_reason="max_depth",
             )
 
+        # Propagate control-flow context to DAGBuilder before running children.
+        # plan_mode=True: DAGBuilder needs to know the current control type so
+        # that register_action() wires parallel fan-outs and fallback skips
+        # correctly.  We save the parent context and restore it in `finally`
+        # so nested ControlFlowNodes each manage their own scope.
+        _dag_snapshot = None
+        if getattr(rctx.env, 'plan_mode', False) and hasattr(rctx.env, '_dag'):
+            _dag_snapshot = rctx.env._dag.get_context_snapshot()
+            if self.control_type == self.PARALLEL:
+                # Capture the last registered node as the shared predecessor
+                # for all parallel siblings — they all fan out from here.
+                rctx.env._dag.set_context("parallel", parallel_predecessor=rctx.env._dag.last_id)
+            elif self.control_type == self.FALLBACK:
+                rctx.env._dag.set_context("fallback")
+            else:  # SEQUENCE
+                rctx.env._dag.set_context("sequence")
+
+        try:
+            return await self._run_children(rctx, step_id, decision_id)
+        finally:
+            if _dag_snapshot is not None:
+                rctx.env._dag.restore_context_snapshot(_dag_snapshot)
+
+    async def _run_children(
+        self,
+        rctx: NodeRunContext,
+        step_id: int,
+        decision_id: int,
+    ) -> TreeExecutionResult:
+        """Inner dispatch — executes children under the already-set DAG context."""
+        env = rctx.env
+
         if self.control_type == self.SEQUENCE:
             for i, child in enumerate(self.children):
-                result = await child.run(context, step_id, decision_id, log, max_depth, env)
+                result = await child.run(rctx, step_id, decision_id)
                 step_id, decision_id = result.step_id, result.decision_id
                 if not result.success:
                     # Attempt local sub-tree replanning before propagating failure upward
@@ -107,6 +130,12 @@ class ControlFlowNode:
                             )
                             # Lazy import to avoid circular dependency
                             from src.cognition.agent_node import AgentNode
+                            replan_rctx = NodeRunContext(
+                                context=fresh_ctx,
+                                log=rctx.log,
+                                max_depth=rctx.max_depth,
+                                env=env,
+                            )
                             for step in replan_ctx.new_plan:
                                 rn = AgentNode(
                                     node_id=f"replan_{step.get('goal', '?')}",
@@ -114,7 +143,7 @@ class ControlFlowNode:
                                     depth=self.depth + 1,
                                 )
                                 rn.goal = step.get("skill", step.get("goal", "noop"))
-                                r = await rn.run(fresh_ctx, step_id, decision_id, log, max_depth, env)
+                                r = await rn.run(replan_rctx, step_id, decision_id)
                                 step_id, decision_id = r.step_id, r.decision_id
                                 if not r.success:
                                     return TreeExecutionResult(
@@ -130,7 +159,7 @@ class ControlFlowNode:
 
         elif self.control_type == self.FALLBACK:
             for child in self.children:
-                result = await child.run(context, step_id, decision_id, log, max_depth, env)
+                result = await child.run(rctx, step_id, decision_id)
                 step_id, decision_id = result.step_id, result.decision_id
                 if result.success:
                     return TreeExecutionResult(
@@ -143,7 +172,7 @@ class ControlFlowNode:
             # via evaluate_children() — consistent with the spec and testable independently.
             child_results: List[bool] = []
             for child in self.children:
-                result = await child.run(context, step_id, decision_id, log, max_depth, env)
+                result = await child.run(rctx, step_id, decision_id)
                 step_id, decision_id = result.step_id, result.decision_id
                 child_results.append(result.success)
             success = self.evaluate_children(child_results)

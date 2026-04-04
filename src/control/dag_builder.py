@@ -117,6 +117,41 @@ class DAGBuilder:
         self._parallel_predecessor = parallel_predecessor
         self._fallback_registered = False
 
+    @property
+    def last_id(self) -> Optional[str]:
+        """The node_id of the most recently registered sequence node.
+
+        Used by ControlFlowNode.run() to determine the correct
+        parallel_predecessor before entering a Parallel block.
+        """
+        return self._last_id
+
+    def get_context_snapshot(self) -> dict:
+        """Return current context state as a dict for save/restore.
+
+        ControlFlowNode.run() saves this before setting a new context and
+        restores it after all children have completed, so that nested
+        ControlFlowNodes do not corrupt the parent's context.
+
+        Note: _last_id is intentionally excluded — it reflects actual DAG
+        state (which node was last registered) and must not be rolled back.
+        """
+        return {
+            "type": self._context_type,
+            "parallel_predecessor": self._parallel_predecessor,
+            "fallback_registered": self._fallback_registered,
+        }
+
+    def restore_context_snapshot(self, snapshot: dict) -> None:
+        """Restore context state saved by get_context_snapshot().
+
+        Called by ControlFlowNode.run() in its finally block to reinstate
+        the parent node's context after children finish executing.
+        """
+        self._context_type = snapshot["type"]
+        self._parallel_predecessor = snapshot["parallel_predecessor"]
+        self._fallback_registered = snapshot["fallback_registered"]
+
     # ------------------------------------------------------------------
     # Write API (called during tree execution)
     # ------------------------------------------------------------------

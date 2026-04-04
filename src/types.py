@@ -11,7 +11,7 @@ Planning / cognition       AgentDecision
 Events / signals           DeviationEvent, EventTriggerSignal, InterventionSignal, ResumeSignal
 Execution                  ExecutionResult
 DAG output (internal)      AtomicAction, DAGNode, Edge
-Tree execution             TreeExecutionResult
+Tree execution             NodeRunContext, TreeExecutionResult
 Planner ↔ Scheduler API   NodeStatus, PlanNode, ExecutionNodeRef, PlanRequest, PlanResponse
 """
 from __future__ import annotations
@@ -154,6 +154,27 @@ class Edge:
 # ---------------------------------------------------------------------------
 # Tree execution (hierarchical planning)
 # ---------------------------------------------------------------------------
+
+@dataclass
+class NodeRunContext:
+    """Per-call invariants passed through the recursive agent tree.
+
+    Bundles the arguments that never change between recursive calls
+    (context snapshot, log, depth limit, environment reference) so that
+    ControlFlowNode.run() and AgentNode.run() carry only two explicit
+    scalars — step_id and decision_id — which are genuinely mutable
+    and are still returned via TreeExecutionResult.
+
+    Contrast with ReAcTree, which embeds env/cfg on each node at
+    construction time.  NodeRunContext preserves node statelessness while
+    eliminating argument repetition: adding a new invariant (e.g. a token
+    budget) requires one field here, not a change to every call site.
+    """
+    context: SharedContext           # current world-state snapshot
+    log: List[Dict[str, Any]]        # append-only execution log
+    max_depth: int                   # hard recursion depth limit
+    env: Any                         # LaboratoryEnvironment reference
+
 
 @dataclass
 class TreeExecutionResult:
