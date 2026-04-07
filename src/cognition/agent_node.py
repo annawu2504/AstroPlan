@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from typing import Any, Dict, List, Optional
 
 from src.types import AgentDecision, Milestone, NodeRunContext, SharedContext, TreeExecutionResult
@@ -73,10 +72,19 @@ class AgentNode:
         for m in milestones:
             milestone_txt += f"\n- Goal: {m.goal}\n  Steps: {m.trajectory}"
 
+        # Tree position context: helps the LLM reason about scope and nesting level.
+        # node_id encodes the path (e.g. "root_sub0_sub2"); depth is the nesting level.
+        path_parts = self.node_id.split("_")
+        tree_path = " > ".join(path_parts) if len(path_parts) > 1 else self.node_id
+        completed_skills = [e.get("skill", "") for e in context.action_log]
+        completed_txt = ", ".join(completed_skills) if completed_skills else "none"
+
         return (
             f"You are an autonomous space-lab planning agent.\n"
             f"Lab: {context.lab_id}\n"
+            f"Tree position: {tree_path} (depth={self.depth})\n"
             f"Current sub-goal: {sub_goal}\n"
+            f"Already completed skills: {completed_txt}\n"
             f"Subsystem states: {json.dumps(context.subsystem_states)}\n"
             f"Latest telemetry: {json.dumps(context.telemetry)}\n"
             f"Expert milestones:{milestone_txt or ' none'}\n\n"
@@ -190,10 +198,16 @@ class AgentNode:
                 terminate_reason="max_depth",
             )
 
+        # Refresh context from live memory so _mock_plan Case 3 sees the
+        # up-to-date action_log (completed skills logged by earlier siblings).
+        live_context = rctx.context
+        if hasattr(rctx.env, '_memory'):
+            live_context = rctx.env._memory.snapshot()
+
         # Get decision from planner
         decision = self.execute_decision(
             sub_goal=self.goal if self.goal else "complete mission",
-            context=rctx.context,
+            context=live_context,
             milestones=[],
         )
         decision_id += 1
@@ -318,17 +332,15 @@ class AgentNode:
             "subsystem": env._skill_to_subsystem(skill),
         }
 
-        _t0 = time.time()
         try:
             if env._mcp.has_skill(skill):
                 result = env._mcp.call(skill, params)
                 if asyncio.iscoroutine(result):
                     result = await result
             else:
-                import json
-                wire = bytearray(
-                    json.dumps(action_payload, ensure_ascii=False).encode("utf-8")
-                )
+                # Serialize via OutputController — the single authorized
+                # serialization point for hardware-bound payloads.
+                wire = env._output.serialize_action(action_payload)
                 tx = await env._hw.execute_instruction(wire)
                 # For async actions, poll until done
                 if skill in env._hw.ASYNC_ACTIONS:
@@ -338,8 +350,9 @@ class AgentNode:
                         if res.status == "completed":
                             break
 
-            # Record RTT for latency estimation (command dispatch → acknowledgement)
-            env._latency.record_rtt((time.time() - _t0) * 1000)
+            # Derive RTT from telemetry packet age (space comms latency),
+            # not from local MCP call timing.
+            env._latency.record_from_telemetry(env._memory.snapshot().telemetry)
 
             # Log success
             env._memory.log_action(action_payload)
@@ -360,8 +373,8 @@ class AgentNode:
             return True
 
         except Exception as exc:
-            # Record RTT even on failure so the observer sees the attempt
-            env._latency.record_rtt((time.time() - _t0) * 1000)
+            # Sample RTT even on failure so the observer sees the attempt.
+            env._latency.record_from_telemetry(env._memory.snapshot().telemetry)
             print(f"[{env.lab_id}] Action '{skill}' raised: {exc}")
             log.append({
                 "type": "action",

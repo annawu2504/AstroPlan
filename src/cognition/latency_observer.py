@@ -34,6 +34,21 @@ class LatencyObserver:
         """Record one round-trip time measurement in milliseconds."""
         self._samples.append(rtt_ms)
 
+    def record_from_telemetry(self, telemetry_snapshot: dict) -> None:
+        """Derive RTT from the age of the latest telemetry packet.
+
+        Space communication RTT is estimated as 2× the one-way delay, where
+        the one-way delay is ``now - packet_timestamp``.  The ``_timestamp``
+        key is injected by ``TelemetryBus.monitor_stream()``; if absent (e.g.
+        in mock envs that use ``apply_mock_update``), the call is a no-op.
+        """
+        ts = telemetry_snapshot.get("_timestamp")
+        if ts is None:
+            return
+        now_ms = int(time.time() * 1000)
+        one_way_ms = max(0.0, float(now_ms - ts))
+        self._samples.append(one_way_ms * 2)
+
     def estimated_rtt(self) -> Optional[float]:
         """Return the rolling average RTT, or None if no samples yet."""
         if not self._samples:

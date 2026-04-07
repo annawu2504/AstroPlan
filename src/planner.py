@@ -39,6 +39,7 @@ from typing import Any, List, Optional
 from src.core.config_loader import AppConfig
 from src.interfaces.scheduler_adapter import ISchedulerAdapter, IStatusReporter
 from src.types import (
+    ExecutionNodeRef,
     ExecutionResult,
     PlanRequest,
     PlanResponse,
@@ -194,6 +195,42 @@ class AstroPlan:
         )
         await self._reporter.on_plan_generated(response)
         return response
+
+    async def replan(
+        self,
+        mission: str,
+        *,
+        failed_node: ExecutionNodeRef,
+        current_revision_id: str,
+        current_dag: Optional[Any] = None,
+        completed_nodes: Optional[List[ExecutionNodeRef]] = None,
+    ) -> PlanResponse:
+        """Convenience replan triggered by a single node failure.
+
+        Wraps ``plan()`` with a pre-constructed ``PlanRequest`` so callers
+        (e.g. agentos_scheduler) don't need to build the request manually.
+
+        Parameters
+        ----------
+        mission:
+            Original mission context string (unchanged across revisions).
+        failed_node:
+            The ``ExecutionNodeRef`` that failed and needs its sub-tree rebuilt.
+        current_revision_id:
+            The revision that produced the failing node.
+        current_dag:
+            The DAG dict from the failing revision (for freeze/diff logic).
+        completed_nodes:
+            Nodes that completed successfully and should be frozen.
+        """
+        request = PlanRequest(
+            mission_context=mission,
+            current_revision_id=current_revision_id,
+            current_dag=current_dag,
+            completed_nodes=completed_nodes or [],
+            failed_nodes=[failed_node],
+        )
+        return await self.plan(request)
 
     async def execute_standalone(
         self,

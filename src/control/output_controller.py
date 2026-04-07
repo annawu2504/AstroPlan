@@ -45,6 +45,19 @@ class OutputController:
                 pass  # may already be uncompressed
         return json.loads(raw.decode("utf-8"))
 
+    def serialize_action(self, action_payload: dict) -> bytearray:
+        """Serialize a raw action payload dict for hardware dispatch.
+
+        This is the single authorized serialization point for the non-MCP
+        hardware path.  Unlike ``serialize()``, the payload is kept
+        uncompressed so ``HardwareExecutor`` can decode it with plain
+        ``json.loads`` without needing a reference back to this controller.
+        Chain-of-thought and planning metadata are not present in the
+        action payload so no stripping is required.
+        """
+        raw = json.dumps(action_payload, ensure_ascii=False).encode("utf-8")
+        return bytearray(raw)
+
     def generate_dag_json(self, dag_builder: Any) -> bytearray:
         """Serialize the execution DAG to a human-readable JSON bytearray.
 
