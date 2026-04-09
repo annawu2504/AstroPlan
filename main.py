@@ -7,26 +7,29 @@ Demonstrates the real plan → MockScheduler execute loop:
   3. MockScheduler.await_terminal_event() executes each node via MCPRegistry
   4. On failure → AstroPlan.plan() replans; loop repeats
 
-Set ANTHROPIC_API_KEY to enable real LLM planning; otherwise the built-in
-rule-based fallback in AgentNode is used (no external services required).
-
 Usage::
 
+    # Default demo (Fluid-Lab-Demo)
     python main.py
+
+    # Specific lab
+    python main.py --lab fiber-composite-lab
+    python main.py --lab microbio-sampling-lab
+
+    # Run ALFRED/WAH-compatible benchmark for a lab
+    python main.py --benchmark --lab fiber-composite-lab
+    python main.py --benchmark          # benchmarks all three labs
+
+Set ANTHROPIC_API_KEY or configure config.yaml to enable real LLM planning;
+otherwise the built-in rule-based fallback in AgentNode is used.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 
 from src.core.config_loader import load_config
-from src.physics.interlock_engine import InterlockEngine
-from src.execution.task_ingestor import TaskDataset
-from src.execution.telemetry_bus import TelemetryBus
-from src.memory.working_memory import WorkingMemory
-from src.core.mcp_registry import MCPRegistry
-from src.planner import AstroPlan
-from src.evaluation import MockScheduler
 
 
 def _make_llm_client(cfg):
@@ -90,91 +93,49 @@ def _make_llm_client(cfg):
         return None
 
 
-def _register_demo_skills(
-    registry: MCPRegistry,
-    memory: WorkingMemory,
-    interlock: InterlockEngine,
-    telemetry_bus: TelemetryBus,
-) -> None:
-    """Register Fluid-Lab-Demo skills in the MCP registry.
-
-    These skills are invoked by MockScheduler when it executes plan nodes.
-    Side-effects (FSM transitions, telemetry updates) happen here, not
-    during planning (plan_mode=True skips all dispatch).
-    """
-
-    @registry.mcp_tool
-    def activate_pump(params: dict) -> dict:
-        interlock.apply_action("activate_pump")
-        memory.update_subsystem_state("fluid_pump", "ACTIVE")
-        telemetry_bus.apply_mock_update({"flow_rate": 15.0})
-        memory.update_telemetry({"flow_rate": 15.0})
-        return {"status": "ok", "flow_rate": 15.0}
-
-    @registry.mcp_tool
-    def heat_to_40(params: dict) -> dict:
-        interlock.apply_action("heat_to_40")
-        memory.update_subsystem_state("thermal", "HEATING")
-        telemetry_bus.apply_mock_update({"temperature": 40.0})
-        memory.update_telemetry({"temperature": 40.0})
-        return {"status": "ok", "temperature": 40.0}
-
-    @registry.mcp_tool
-    def activate_camera(params: dict) -> dict:
-        interlock.apply_action("activate_camera")
-        memory.update_subsystem_state("camera", "ACTIVE")
-        telemetry_bus.apply_mock_update({"camera_status": "RECORDING"})
-        memory.update_telemetry({"camera_status": "RECORDING"})
-        return {"status": "ok", "camera_status": "RECORDING"}
 
 
-async def main() -> None:
-    cfg = load_config()
-    lab_id: str = cfg.lab_id
+_DEFAULT_MISSION = {
+    "Fluid-Lab-Demo":
+        "进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。",
+    "fiber-composite-lab":
+        "执行完整的空间碳纤维复合材料原位成型实验",
+    "microbio-sampling-lab":
+        "执行完整空气微生物采样实验，包含培养、拍照与样品封装回收",
+}
 
-    # --- Task ---
-    ingestor = TaskDataset.parse_requirements(
-        "进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。"
-    )
-    nl_goal = ingestor.nl_global_goal
+_TASK_FILES = {
+    "Fluid-Lab-Demo":       "config/tasks/fluid_lab_tasks.yaml",
+    "fiber-composite-lab":  "config/tasks/fiber_composite_tasks.yaml",
+    "microbio-sampling-lab": "config/tasks/microbio_sampling_tasks.yaml",
+}
 
-    # --- Telemetry bus (for skill side-effects) ---
-    telemetry_bus = TelemetryBus(
-        lab_id=lab_id,
-        rules={
-            "temperature": {"max": 80.0},
-            "flow_rate": {"max": 50.0},
-            "pressure_kpa": {"max": 200.0},
-        },
-    )
-    telemetry_bus.apply_mock_update(
-        {"temperature": 20.0, "flow_rate": 0.0, "camera_status": "OFF"}
-    )
 
-    # --- Physics ---
-    interlock = InterlockEngine.from_yaml("config/fsm_rules.yaml", lab_id=lab_id)
+async def run_demo(cfg, lab_id: str, nl_goal: str) -> None:
+    """Single-mission demo run."""
+    from src.physics.interlock_engine import InterlockEngine
+    from src.execution.telemetry_bus import TelemetryBus
+    from src.memory.working_memory import WorkingMemory
+    from src.core.mcp_registry import MCPRegistry
+    from src.core.skill_catalog import SkillCatalog
+    from src.planner import AstroPlan
+    from src.evaluation import MockScheduler
 
-    # --- Shared working memory (used by skill side-effects via registry) ---
+    telemetry_bus = TelemetryBus(lab_id=lab_id, rules={})
+    interlock = InterlockEngine.from_yaml(cfg.fsm_rules_path, lab_id=lab_id)
+
     working_memory = WorkingMemory(lab_id=lab_id)
-    working_memory.update_telemetry(
-        {"temperature": 20.0, "flow_rate": 0.0, "camera_status": "OFF"}
-    )
-    for subsystem in ("fluid_pump", "thermal", "camera"):
-        working_memory.update_subsystem_state(subsystem, "IDLE")
+    for subsystem, state in interlock.current_states().items():
+        working_memory.update_subsystem_state(subsystem, state)
 
-    # --- MCP skill registry ---
     mcp = MCPRegistry(compress=cfg.mcp.compress)
-    _register_demo_skills(mcp, working_memory, interlock, telemetry_bus)
+    catalog = SkillCatalog.load(cfg.skills_path)
+    catalog.register_all(mcp, working_memory, interlock, telemetry_bus)
 
-    # --- Planner ---
     llm_client = _make_llm_client(cfg)
     planner = AstroPlan(cfg, interlock, mcp, llm_client=llm_client)
-
-    # --- Mock Scheduler (simulates agentos_scheduler execution) ---
-    # failure_rate=0.0 → deterministic success; raise to stress-test replanning
     scheduler = MockScheduler(mcp, failure_rate=0.0)
 
-    # --- Run ---
     print(f"\n[{lab_id}] Mission: {nl_goal}\n")
     result = await planner.execute_standalone(nl_goal, scheduler=scheduler)
 
@@ -184,6 +145,70 @@ async def main() -> None:
     print(f"  revisions    : {scheduler.submitted_revisions}")
     print(f"  nodes run    : {scheduler.total_nodes_executed}")
     print(f"  failures     : {scheduler.total_failures}")
+    print(f"  skills run   : {scheduler.executed_skill_names}")
+
+
+async def run_benchmark(cfg, lab_id: str) -> None:
+    """ALFRED/WAH-compatible benchmark for one or all labs."""
+    from src.evaluation.task_suite import TaskSuite, SpaceLabBenchmark
+
+    labs = list(_TASK_FILES.keys()) if lab_id == "all" else [lab_id]
+    benchmark = SpaceLabBenchmark(llm_client=_make_llm_client(cfg))
+
+    for lid in labs:
+        task_file = _TASK_FILES.get(lid)
+        if not task_file or not os.path.exists(task_file):
+            print(f"[Benchmark] No task file for lab '{lid}' — skipping.")
+            continue
+        suite = TaskSuite.load(task_file)
+        print(f"\n{'='*60}")
+        print(f"[Benchmark] Lab: {lid}  ({len(suite.tasks)} tasks)")
+        print("="*60)
+        report = await benchmark.run_suite(suite)
+        # Save report
+        import json, pathlib
+        out = pathlib.Path("outputs/benchmark")
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / f"{lid}_report.json", "w", encoding="utf-8") as fh:
+            import dataclasses
+            json.dump(dataclasses.asdict(report), fh, indent=2, ensure_ascii=False)
+        print(f"\n[Benchmark] Report saved: outputs/benchmark/{lid}_report.json")
+
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="AstroPlan standalone runner")
+    parser.add_argument(
+        "--lab",
+        default=None,
+        help="Lab ID to use (default: value from config.yaml). "
+             "Use 'all' with --benchmark to run all labs.",
+    )
+    parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="Run ALFRED/WAH-compatible task benchmark instead of single demo.",
+    )
+    parser.add_argument(
+        "--mission",
+        default=None,
+        help="Override the natural-language mission string for demo mode.",
+    )
+    args = parser.parse_args()
+
+    cfg = load_config()
+    lab_id = args.lab or cfg.lab_id
+
+    # Re-resolve paths if lab_id was overridden via --lab
+    if args.lab and args.lab != cfg.lab_id:
+        from src.core.config_loader import _resolve_lab_paths
+        cfg.lab_id = lab_id
+        cfg.fsm_rules_path, cfg.skills_path = _resolve_lab_paths(lab_id)
+
+    if args.benchmark:
+        await run_benchmark(cfg, lab_id)
+    else:
+        nl_goal = args.mission or _DEFAULT_MISSION.get(lab_id, "进行实验")
+        await run_demo(cfg, lab_id, nl_goal)
 
 
 if __name__ == "__main__":

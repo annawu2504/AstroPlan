@@ -1,0 +1,122 @@
+# Fiber-Composite-Lab FSM rules
+# Space continuous fiber reinforced composite in-situ forming experiment
+# Based on: 空间连续纤维增强复合材料原位成型实验说明书
+#
+# Safety dependencies enforced by InterlockEngine:
+#   - vacuum must be RUNNING before nozzle preheating (debris safety)
+#   - nozzle, platform, motion, ground_link all must be READY before first layer
+#   - fiber tension must be STABLE before main forming
+#   - print job must be COMPLETE before cooling platform
+
+fiber-composite-lab:
+  subsystems:
+
+    vacuum_system:
+      states: [IDLE, RUNNING]
+      initial: IDLE
+      transitions:
+        IDLE:
+          enable_vacuum_exhaust: RUNNING
+        RUNNING:
+          disable_vacuum_exhaust: IDLE
+
+    print_nozzle:
+      states: [COLD, READY, FAULT]
+      initial: COLD
+      transitions:
+        COLD:
+          preheat_nozzle:
+            target: READY
+            requires:
+              vacuum_system: RUNNING
+        READY:
+          reset_nozzle: COLD
+        FAULT:
+          reset_nozzle: COLD
+
+    build_platform:
+      states: [COLD, READY]
+      initial: COLD
+      transitions:
+        COLD:
+          preheat_platform: READY
+        READY:
+          cool_platform:
+            target: COLD
+            requires:
+              print_job: COMPLETE
+
+    motion_system:
+      states: [UNINITIALIZED, READY]
+      initial: UNINITIALIZED
+      transitions:
+        UNINITIALIZED:
+          home_printhead: READY
+        READY:
+          reset_motion: UNINITIALIZED
+
+    ground_link:
+      states: [UNCONFIRMED, AUTHORIZED]
+      initial: UNCONFIRMED
+      transitions:
+        UNCONFIRMED:
+          request_bacc_authorization: AUTHORIZED
+        AUTHORIZED:
+          release_authorization: UNCONFIRMED
+
+    fiber_tension:
+      states: [IDLE, STABLE, FAULT]
+      initial: IDLE
+      transitions:
+        IDLE:
+          ramp_fiber_tension:
+            target: STABLE
+            requires:
+              print_job: FIRST_LAYER
+        STABLE:
+          release_tension: IDLE
+        FAULT:
+          reset_tension: IDLE
+
+    print_job:
+      states: [IDLE, FIRST_LAYER, FORMING, COMPLETE]
+      initial: IDLE
+      transitions:
+        IDLE:
+          start_first_layer:
+            target: FIRST_LAYER
+            requires:
+              vacuum_system: RUNNING
+              print_nozzle: READY
+              build_platform: READY
+              motion_system: READY
+              ground_link: AUTHORIZED
+        FIRST_LAYER:
+          execute_main_forming:
+            target: FORMING
+            requires:
+              fiber_tension: STABLE
+          abort_print: IDLE
+        FORMING:
+          cut_fiber: COMPLETE
+          abort_print: IDLE
+        COMPLETE:
+          reset_print_job: IDLE
+
+  thresholds:
+    nozzle_temp_c:
+      min: 350.0
+      max: 400.0
+      severity: CRITICAL
+    platform_temp_c:
+      min: 140.0
+      max: 160.0
+      severity: WARNING
+    tension_n:
+      min: 0.2
+      max: 2.0
+      severity: CRITICAL
+    vacuum_flow_lpm:
+      min: 10.0
+      max: 30.0
+      severity: WARNING

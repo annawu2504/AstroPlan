@@ -1,0 +1,70 @@
+# Fluid-Lab-Demo evaluation task suite
+# ALFRED/WAH-compatible: each task has nl_goal, expected_skills (gold plan),
+# and goal_conditions (terminal subsystem states required for success).
+
+lab_id: Fluid-Lab-Demo
+
+tasks:
+
+  - task_id: fluid_001
+    difficulty: easy
+    tags: [single_skill, telemetry]
+    nl_goal: "读取当前传感器数据"
+    nl_goal_en: "Read current sensor telemetry data"
+    expected_skills:
+      - read_telemetry
+    goal_conditions: {}   # purely informational, no FSM state change
+
+  - task_id: fluid_002
+    difficulty: easy
+    tags: [two_skills, pump, camera]
+    nl_goal: "激活流体泵并开启摄像头"
+    nl_goal_en: "Activate the fluid pump and start the camera"
+    expected_skills:
+      - activate_pump
+      - activate_camera
+    goal_conditions:
+      fluid_pump: ACTIVE
+      camera: ACTIVE
+
+  - task_id: fluid_003
+    difficulty: medium
+    tags: [full_sequence, heating, camera]
+    nl_goal: "进行完整流体实验：激活泵，加热至40°C，启动摄像头记录数据"
+    nl_goal_en: "Conduct full fluid experiment: activate pump, heat to 40°C, start camera"
+    expected_skills:
+      - activate_pump
+      - heat_to_40
+      - activate_camera
+    goal_conditions:
+      fluid_pump: ACTIVE
+      thermal: HEATING
+      camera: ACTIVE
+
+  - task_id: fluid_004
+    difficulty: hard
+    tags: [full_lifecycle, shutdown, safety]
+    nl_goal: "完整流体实验并安全关机：激活泵加热摄像后，降温并关闭所有系统"
+    nl_goal_en: "Full fluid experiment with safe shutdown: activate pump, heat, record, then cool and deactivate all"
+    expected_skills:
+      - activate_pump
+      - heat_to_40
+      - activate_camera
+      - cool_down
+      - deactivate_camera
+      - deactivate_pump
+    goal_conditions:
+      fluid_pump: IDLE
+      thermal: IDLE
+      camera: IDLE
+
+  - task_id: fluid_005
+    difficulty: easy
+    tags: [emergency, safety]
+    nl_goal: "紧急停止所有系统"
+    nl_goal_en: "Emergency stop all systems"
+    expected_skills:
+      - emergency_stop
+    goal_conditions:
+      fluid_pump: IDLE
+      camera: IDLE

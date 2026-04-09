@@ -1,0 +1,111 @@
+# AstroPlan Fluid-Lab-Demo skill catalog
+#
+# Each entry defines one MCP skill available to the planner.
+# Fields:
+#   name            — exact identifier used in LLM prompts and MCPRegistry
+#   description     — human/LLM-readable explanation of purpose and usage
+#   subsystem       — affected hardware subsystem (matches fsm_rules.yaml key)
+#   subsystem_state — FSM state the subsystem moves into (null = no state change)
+#   fsm_action      — action key applied to InterlockEngine (null = skip FSM)
+#   telemetry_effects — telemetry fields updated on success (mock values)
+#   result_fields   — extra fields included in the returned result dict
+
+skills:
+
+  - name: activate_pump
+    description: >
+      Start the fluid circulation pump. Sets flow rate to 15 L/min.
+      Must be called before heat_to_40 (heating requires an active pump).
+    subsystem: fluid_pump
+    subsystem_state: ACTIVE
+    fsm_action: activate_pump
+    telemetry_effects:
+      flow_rate: 15.0
+    result_fields:
+      flow_rate: 15.0
+
+  - name: deactivate_pump
+    description: >
+      Safely shut down the fluid circulation pump and stop flow.
+      Call after cool_down to protect pump hardware.
+    subsystem: fluid_pump
+    subsystem_state: IDLE
+    fsm_action: deactivate_pump
+    telemetry_effects:
+      flow_rate: 0.0
+    result_fields:
+      flow_rate: 0.0
+
+  - name: heat_to_40
+    description: >
+      Heat the experiment sample to 40°C. Requires fluid_pump to be ACTIVE —
+      always call activate_pump before this skill.
+    subsystem: thermal
+    subsystem_state: HEATING
+    fsm_action: heat_to_40
+    telemetry_effects:
+      temperature: 40.0
+    result_fields:
+      temperature: 40.0
+
+  - name: cool_down
+    description: >
+      Cool the thermal subsystem back to ambient (~22°C).
+      Call after the heating phase is complete before deactivating the pump.
+    subsystem: thermal
+    subsystem_state: IDLE
+    fsm_action: cool_down
+    telemetry_effects:
+      temperature: 22.0
+    result_fields:
+      temperature: 22.0
+
+  - name: activate_camera
+    description: >
+      Start high-resolution camera recording. Use during active experiment
+      phases to capture visual data (fluid dynamics, crystal formation, etc.).
+    subsystem: camera
+    subsystem_state: ACTIVE
+    fsm_action: activate_camera
+    telemetry_effects:
+      camera_status: RECORDING
+    result_fields:
+      camera_status: RECORDING
+
+  - name: deactivate_camera
+    description: >
+      Stop camera recording and flush the frame buffer to onboard storage.
+      Call when the observation phase is complete.
+    subsystem: camera
+    subsystem_state: IDLE
+    fsm_action: deactivate_camera
+    telemetry_effects:
+      camera_status: OFF
+    result_fields:
+      camera_status: OFF
+
+  - name: read_telemetry
+    description: >
+      Read the latest sensor snapshot: temperature (°C), flow_rate (L/min),
+      pressure (kPa), camera_status. Use to verify system state before or
+      after critical actions.
+    subsystem: telemetry
+    subsystem_state: null
+    fsm_action: null
+    telemetry_effects: {}
+    result_fields: {}
+
+  - name: emergency_stop
+    description: >
+      Emergency shutdown of all active subsystems in safe order:
+      camera off → thermal cool-down → pump off. Use at end-of-mission or
+      in response to a fault/anomaly. Skips steps that are already IDLE.
+    subsystem: all
+    subsystem_state: null
+    fsm_action: null
+    telemetry_effects:
+      flow_rate: 0.0
+      temperature: 22.0
+      camera_status: OFF
+    result_fields:
+      stopped: true

@@ -1,0 +1,88 @@
+# Microbio-Sampling-Lab FSM rules
+# Tianhe core module air microbial sampling experiment
+# Based on: 天和核心舱空气微生物采样实验说明书
+#
+# Safety dependencies enforced by InterlockEngine:
+#   - cabin must be CLEARED before mounting petri dishes (avoid contamination)
+#   - ground_link must be AUTHORIZED before opening petri dishes
+#   - incubator must be READY before opening or transferring dishes
+#   - petri_dishes must follow strict state sequence (SEALED→...→ARCHIVED)
+
+microbio-sampling-lab:
+  subsystems:
+
+    cabin_environment:
+      states: [OCCUPIED, CLEARED]
+      initial: OCCUPIED
+      transitions:
+        OCCUPIED:
+          clear_cabin: CLEARED
+        CLEARED:
+          resume_cabin: OCCUPIED
+
+    incubator:
+      states: [IDLE, WARMING, READY, INCUBATING]
+      initial: IDLE
+      transitions:
+        IDLE:
+          preheat_incubator: WARMING
+        WARMING:
+          verify_incubator_ready: READY
+        READY:
+          start_incubation:
+            target: INCUBATING
+            requires:
+              petri_dishes: INCUBATING
+        INCUBATING:
+          complete_incubation: READY
+
+    ground_link:
+      states: [UNCONFIRMED, AUTHORIZED]
+      initial: UNCONFIRMED
+      transitions:
+        UNCONFIRMED:
+          request_sampling_authorization: AUTHORIZED
+        AUTHORIZED:
+          release_authorization: UNCONFIRMED
+
+    petri_dishes:
+      states: [SEALED, PREPARED, MOUNTED, OPEN, SEALED_POST, INCUBATING, ARCHIVED]
+      initial: SEALED
+      transitions:
+        SEALED:
+          prepare_petri_dishes: PREPARED
+        PREPARED:
+          mount_petri_dishes:
+            target: MOUNTED
+            requires:
+              cabin_environment: CLEARED
+        MOUNTED:
+          open_petri_dishes:
+            target: OPEN
+            requires:
+              ground_link: AUTHORIZED
+              incubator: READY
+        OPEN:
+          seal_petri_dishes: SEALED_POST
+        SEALED_POST:
+          transfer_to_incubator:
+            target: INCUBATING
+            requires:
+              incubator: READY
+        INCUBATING:
+          photograph_colonies: ARCHIVED
+        ARCHIVED:
+          package_for_return_fsm: ARCHIVED    # no-op state change for final step
+
+  thresholds:
+    incubator_temp_c:
+      min: 35.0
+      max: 37.0
+      severity: CRITICAL
+    cabin_co2_ppm:
+      max: 5000.0
+      severity: WARNING
+    cabin_humidity_pct:
+      min: 30.0
+      max: 70.0
+      severity: WARNING

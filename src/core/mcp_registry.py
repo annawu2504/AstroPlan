@@ -28,6 +28,7 @@ class MCPRegistry:
     def __init__(self, compress: bool = True):
         self._compress = compress
         self._tools: Dict[str, Callable] = {}
+        self._descriptions: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -47,6 +48,10 @@ class MCPRegistry:
         """Programmatically register a tool under an explicit *name*."""
         self._tools[name] = fn
 
+    def set_description(self, name: str, description: str) -> None:
+        """Store a human/LLM-readable description for a registered skill."""
+        self._descriptions[name] = description
+
     # ------------------------------------------------------------------
     # Invocation
     # ------------------------------------------------------------------
@@ -64,3 +69,10 @@ class MCPRegistry:
 
     def skill_names(self) -> list:
         return list(self._tools.keys())
+
+    def skill_descriptions(self) -> Dict[str, str]:
+        """Return {name: description} for all registered skills."""
+        return {
+            name: self._descriptions.get(name, "")
+            for name in self._tools
+        }

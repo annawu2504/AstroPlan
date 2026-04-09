@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Optional
 
 from src.types import AgentDecision, Milestone, NodeRunContext, SharedContext, TreeExecutionResult
 
+# Type alias for skill catalog: {name: description}
+SkillMap = Dict[str, str]
+
 
 class AgentNode:
     """One node in the hierarchical LLM agent tree.
@@ -24,13 +27,30 @@ class AgentNode:
         to fall back to the built-in mock planner.
     depth:
         Current depth in the tree (root = 0)
+    available_skills:
+        Dict mapping skill name → description.  Injected into the LLM prompt so
+        the model can produce grounded Act actions rather than guessing names.
+        Accepts either a Dict[str, str] or a List[str] (descriptions default to "").
     """
 
-    def __init__(self, node_id: str, llm_client: Optional[Any] = None, depth: int = 0):
+    def __init__(
+        self,
+        node_id: str,
+        llm_client: Optional[Any] = None,
+        depth: int = 0,
+        available_skills: Optional[Any] = None,
+    ):
         self.node_id = node_id
         self._llm = llm_client
         self.depth = depth
         self.goal: str = ""  # Set by parent when creating child nodes
+        # Normalise to Dict[str, str] regardless of input type
+        if available_skills is None:
+            self.available_skills: SkillMap = {}
+        elif isinstance(available_skills, dict):
+            self.available_skills = available_skills
+        else:
+            self.available_skills = {s: "" for s in available_skills}
 
     # ------------------------------------------------------------------
     # Primary API
@@ -73,11 +93,27 @@ class AgentNode:
             milestone_txt += f"\n- Goal: {m.goal}\n  Steps: {m.trajectory}"
 
         # Tree position context: helps the LLM reason about scope and nesting level.
-        # node_id encodes the path (e.g. "root_sub0_sub2"); depth is the nesting level.
         path_parts = self.node_id.split("_")
         tree_path = " > ".join(path_parts) if len(path_parts) > 1 else self.node_id
         completed_skills = [e.get("skill", "") for e in context.action_log]
         completed_txt = ", ".join(completed_skills) if completed_skills else "none"
+
+        # List available skills with descriptions so the LLM can make grounded decisions
+        if self.available_skills:
+            lines = []
+            for sname, sdesc in self.available_skills.items():
+                if sdesc:
+                    one_liner = " ".join(sdesc.split())
+                    lines.append(f"  - {sname}: {one_liner}")
+                else:
+                    lines.append(f"  - {sname}")
+            skills_section = (
+                "Available MCP skills (use exact names in Act/Expand actions):\n"
+                + "\n".join(lines)
+                + "\n\n"
+            )
+        else:
+            skills_section = ""
 
         return (
             f"You are an autonomous space-lab planning agent.\n"
@@ -88,10 +124,19 @@ class AgentNode:
             f"Subsystem states: {json.dumps(context.subsystem_states)}\n"
             f"Latest telemetry: {json.dumps(context.telemetry)}\n"
             f"Expert milestones:{milestone_txt or ' none'}\n\n"
-            f"Respond with a JSON object with keys:\n"
-            f"  skill: one of Think | Act | Expand\n"
-            f"  action: dict with 'skill' and 'params' keys\n"
-            f"  reasoning: brief chain-of-thought (internal only)\n"
+            f"{skills_section}"
+            f"Decision rules:\n"
+            f"  - If the current sub-goal IS one of the available skills → respond with Act\n"
+            f"  - If the current sub-goal is high-level (needs multiple skills) → respond with Expand\n"
+            f"  - If you need to reason without acting → respond with Think\n\n"
+            f"Respond with ONLY a JSON object:\n"
+            f"{{\n"
+            f'  "skill": "Think" | "Act" | "Expand",\n'
+            f'  "action": {{"skill": "<exact_skill_name>", "params": {{}}}}  '
+            f'// for Act; OR {{"control_flow": "Sequence"|"Parallel"|"Fallback", '
+            f'"subgoals": ["skill1", "skill2", ...]}}  // for Expand\n'
+            f'  "reasoning": "brief chain-of-thought"\n'
+            f"}}\n"
         )
 
     def _parse_llm_response(self, raw: str) -> AgentDecision:
@@ -112,7 +157,8 @@ class AgentNode:
     # Mock planning path (no LLM required)
     # ------------------------------------------------------------------
 
-    _SKILL_SEQUENCE = [
+    # Default skill sequence used when no catalog is loaded
+    _DEFAULT_SKILL_SEQUENCE = [
         {"skill": "activate_pump", "params": {}},
         {"skill": "heat_to_40", "params": {}},
         {"skill": "activate_camera", "params": {}},
@@ -124,13 +170,18 @@ class AgentNode:
         """Rule-based fallback planner for Fluid-Lab-Demo.
 
         Decision logic (in priority order):
-        1. If sub_goal is an exact atomic skill name → Act immediately.
+        1. If sub_goal is an exact registered skill name → Act immediately.
         2. If sub_goal contains " and " → Expand by splitting on " and ".
         3. Otherwise treat as a high-level goal → Expand into remaining skills
-           of _SKILL_SEQUENCE in order (scaffold-stripping: tree nodes are
-           scaffolding, only the leaf Act nodes become DAG nodes).
+           in order (scaffold-stripping: tree nodes are scaffolding, only the
+           leaf Act nodes become DAG nodes).
         """
-        known = {step["skill"]: step for step in self._SKILL_SEQUENCE}
+        # Use skills from catalog if available, else fall back to defaults
+        if self.available_skills:
+            sequence = [{"skill": s, "params": {}} for s in self.available_skills]
+        else:
+            sequence = self._DEFAULT_SKILL_SEQUENCE
+        known = {step["skill"]: step for step in sequence}
 
         # Case 1: goal IS an atomic skill name — execute it directly
         if sub_goal in known:
@@ -251,6 +302,7 @@ class AgentNode:
                     node_id=f"{self.node_id}_sub{idx}",
                     llm_client=self._llm,
                     depth=self.depth + 2,
+                    available_skills=self.available_skills,
                 )
                 child_agent.goal = subgoal
                 cf_node.children.append(child_agent)

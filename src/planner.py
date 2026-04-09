@@ -174,7 +174,12 @@ class AstroPlan:
         # Run the agent tree (plan_mode=True — only writes to DAGBuilder)
         from src.cognition.agent_node import AgentNode
         from src.types import NodeRunContext
-        root = AgentNode(node_id="root", llm_client=self._llm, depth=0)
+        root = AgentNode(
+            node_id="root",
+            llm_client=self._llm,
+            depth=0,
+            available_skills=self._registry.skill_descriptions(),
+        )
         root.goal = request.mission_context
 
         context = mem.snapshot()

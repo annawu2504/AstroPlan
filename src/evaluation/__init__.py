@@ -25,10 +25,22 @@ Quick start::
 """
 from src.evaluation.mock_scheduler import MockScheduler
 from src.evaluation.evaluator import AstroPlanEvaluator, EvalConfig, load_eval_config
+from src.evaluation.task_suite import (
+    TaskDefinition,
+    TaskMetrics,
+    BenchmarkReport,
+    TaskSuite,
+    SpaceLabBenchmark,
+)
 
 __all__ = [
     "MockScheduler",
     "AstroPlanEvaluator",
     "EvalConfig",
     "load_eval_config",
+    "TaskDefinition",
+    "TaskMetrics",
+    "BenchmarkReport",
+    "TaskSuite",
+    "SpaceLabBenchmark",
 ]

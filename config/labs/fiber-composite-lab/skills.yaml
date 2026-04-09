@@ -1,0 +1,175 @@
+# Fiber-Composite-Lab skill catalog
+# Space continuous fiber reinforced composite in-situ forming experiment
+# Based on: 空间连续纤维增强复合材料原位成型实验说明书
+
+skills:
+
+  - name: enable_vacuum_exhaust
+    description: >
+      Activate negative-pressure exhaust system (flow ≥10 L/min).
+      MUST be the first step — prevents conductive CF debris from
+      floating loose and short-circuiting cabin electronics.
+    subsystem: vacuum_system
+    subsystem_state: RUNNING
+    fsm_action: enable_vacuum_exhaust
+    telemetry_effects:
+      vacuum_flow_lpm: 12.0
+    result_fields:
+      vacuum_flow_lpm: 12.0
+
+  - name: preheat_nozzle
+    description: >
+      Heat the CF/PEEK extrusion nozzle to 380°C. Requires vacuum
+      exhaust already running. Takes ~5 min; proceeds to READY once
+      temperature is within ±2°C of setpoint.
+    subsystem: print_nozzle
+    subsystem_state: READY
+    fsm_action: preheat_nozzle
+    telemetry_effects:
+      nozzle_temp_c: 380.0
+    result_fields:
+      nozzle_temp_c: 380.0
+
+  - name: preheat_platform
+    description: >
+      Heat the ceramic-coated build platform to 150°C to improve
+      first-layer adhesion of PEEK in microgravity.
+    subsystem: build_platform
+    subsystem_state: READY
+    fsm_action: preheat_platform
+    telemetry_effects:
+      platform_temp_c: 150.0
+    result_fields:
+      platform_temp_c: 150.0
+
+  - name: home_printhead
+    description: >
+      Execute G28 home sequence: move print head to zero position,
+      confirm filament tension is in 0.5–1.2 N standard range.
+    subsystem: motion_system
+    subsystem_state: READY
+    fsm_action: home_printhead
+    telemetry_effects:
+      printhead_homed: 1
+      tension_n: 0.8
+    result_fields: {}
+
+  - name: request_bacc_authorization
+    description: >
+      Transmit "request to start experiment" to Beijing Aerospace
+      Flight Control Center (BACC) and await telemetry confirmation.
+      Required before first layer deposition and fiber cutting.
+    subsystem: ground_link
+    subsystem_state: AUTHORIZED
+    fsm_action: request_bacc_authorization
+    telemetry_effects:
+      ground_auth_received: 1
+    result_fields:
+      authorized: true
+
+  - name: start_first_layer
+    description: >
+      Begin first-layer carbon fiber deposition. Requires vacuum RUNNING,
+      nozzle READY (380°C), platform READY (150°C), motion READY (homed),
+      and BACC authorization. Microscope camera starts capturing
+      wetting angle in parallel.
+    subsystem: print_job
+    subsystem_state: FIRST_LAYER
+    fsm_action: start_first_layer
+    telemetry_effects:
+      layer_count: 1
+      print_speed_mm_min: 50
+    result_fields: {}
+
+  - name: scan_spreading_ratio
+    description: >
+      Perform high-resolution microscope scan of the first layer to
+      measure the spreading ratio (target 1.2–1.8). Returns measured
+      ratio. If ratio < 1.2 → reduce Z-offset; if > 1.8 → lower nozzle
+      temperature 5°C. In the nominal plan the ratio is acceptable.
+    subsystem: null
+    subsystem_state: null
+    fsm_action: null
+    telemetry_effects:
+      spreading_ratio: 1.45
+    result_fields:
+      spreading_ratio: 1.45
+
+  - name: ramp_fiber_tension
+    description: >
+      Ramp fiber tension from start tension smoothly to forming tension
+      (1.0 N ±0.1 N) and simultaneously increase print speed from 50 to
+      300 mm/min. Requires first layer already deposited (print_job:
+      FIRST_LAYER). Reports "entering process steady state" to ground.
+    subsystem: fiber_tension
+    subsystem_state: STABLE
+    fsm_action: ramp_fiber_tension
+    telemetry_effects:
+      tension_n: 1.0
+      print_speed_mm_min: 300
+    result_fields:
+      tension_n: 1.0
+
+  - name: execute_main_forming
+    description: >
+      Execute layer-by-layer fiber deposition path. Each layer triggers
+      UV-assisted curing check. Monitors tension in real time: if >2.0 N
+      reduces speed 50%; if <0.2 N treats as fiber break. Requires fiber
+      tension STABLE.
+    subsystem: print_job
+    subsystem_state: FORMING
+    fsm_action: execute_main_forming
+    telemetry_effects:
+      layer_count: 20
+    result_fields: {}
+
+  - name: cut_fiber
+    description: >
+      Activate mechanical shear mechanism to cut the continuous fiber
+      after printing is complete. Must visually confirm complete severance
+      before cooling. Transitions print job to COMPLETE.
+    subsystem: print_job
+    subsystem_state: COMPLETE
+    fsm_action: cut_fiber
+    telemetry_effects:
+      tension_n: 0.0
+    result_fields: {}
+
+  - name: cool_platform
+    description: >
+      Cool the build platform back to ambient (~25°C). Only allowed after
+      print job is COMPLETE and fiber has been cut. Followed by dust
+      vacuum cleanup.
+    subsystem: build_platform
+    subsystem_state: COLD
+    fsm_action: cool_platform
+    telemetry_effects:
+      platform_temp_c: 25.0
+    result_fields:
+      platform_temp_c: 25.0
+
+  - name: read_tension_sensor
+    description: >
+      Read current fiber tension from the tension sensor module (N).
+      Non-destructive diagnostic; does not change any FSM state.
+      Use before forming to verify nominal tension range (0.5–1.2 N).
+    subsystem: null
+    subsystem_state: null
+    fsm_action: null
+    telemetry_effects: {}
+    result_fields: {}
+
+  - name: emergency_stop_print
+    description: >
+      Emergency abort of printing experiment. Aborts the print job if
+      active, releases fiber tension, holds nozzle at 200°C standby.
+      Keeps vacuum running for debris containment. Use on anomaly
+      or loss-of-signal (LOS) events.
+    subsystem: null
+    subsystem_state: null
+    fsm_action: null
+    telemetry_effects:
+      nozzle_temp_c: 200.0
+      tension_n: 0.0
+    result_fields:
+      stopped: true

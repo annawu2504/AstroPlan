@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 try:
     import yaml  # PyYAML
@@ -68,8 +68,26 @@ class AppConfig:
     bandwidth_kbps: int = 200
     llm: LLMConfig = field(default_factory=LLMConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    # Auto-resolved paths (computed at load time, not in YAML)
+    fsm_rules_path: str = "config/fsm_rules.yaml"
+    skills_path: str = "config/skills.yaml"
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     web_monitor: WebMonitorConfig = field(default_factory=WebMonitorConfig)
+
+
+def _resolve_lab_paths(lab_id: str) -> Tuple[str, str]:
+    """Return (fsm_rules_path, skills_path) for the given lab_id.
+
+    Priority:
+      1. config/labs/{lab_id}/fsm_rules.yaml  (lab-specific)
+      2. config/fsm_rules.yaml                (legacy root fallback)
+    """
+    lab_dir = os.path.join("config", "labs", lab_id)
+    fsm = os.path.join(lab_dir, "fsm_rules.yaml")
+    skills = os.path.join(lab_dir, "skills.yaml")
+    fsm_path = fsm if os.path.exists(fsm) else "config/fsm_rules.yaml"
+    skills_path = skills if os.path.exists(skills) else "config/skills.yaml"
+    return fsm_path, skills_path
 
 
 def load_config(path: str = "./config/config.yaml") -> AppConfig:
@@ -87,9 +105,14 @@ def load_config(path: str = "./config/config.yaml") -> AppConfig:
     orch_d = raw.get("orchestrator", {})
     wm_d = raw.get("web_monitor", {})
 
+    lab_id = raw.get("lab_id", "Fluid-Lab-Demo")
+    fsm_rules_path, skills_path = _resolve_lab_paths(lab_id)
+
     return AppConfig(
-        lab_id=raw.get("lab_id", "Fluid-Lab-Demo"),
+        lab_id=lab_id,
         bandwidth_kbps=raw.get("bandwidth_kbps", 200),
+        fsm_rules_path=fsm_rules_path,
+        skills_path=skills_path,
         llm=LLMConfig(
             model=llm_d.get("model", "claude-sonnet-4-6"),
             api_key=llm_d.get("api_key", ""),

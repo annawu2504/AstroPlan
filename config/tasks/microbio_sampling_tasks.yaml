@@ -1,0 +1,81 @@
+# Microbio-Sampling-Lab evaluation task suite
+# Tasks derived from 天和核心舱空气微生物采样实验说明书
+
+lab_id: microbio-sampling-lab
+
+tasks:
+
+  - task_id: micro_001
+    difficulty: easy
+    tags: [preparation, incubator]
+    nl_goal: "准备培养环境：消毒恒温箱并预热至36°C"
+    nl_goal_en: "Prepare culture environment: sterilize incubator and preheat to 36°C"
+    expected_skills:
+      - sterilize_incubator
+      - preheat_incubator
+      - verify_incubator_ready
+    goal_conditions:
+      incubator: READY
+
+  - task_id: micro_002
+    difficulty: medium
+    tags: [sampling_setup, ground_auth, sterility]
+    nl_goal: "完成空气微生物采样操作：清场、备碟、授权、开始采样"
+    nl_goal_en: "Complete air microbial sampling: clear cabin, prepare dishes, get authorization, start sampling"
+    expected_skills:
+      - clear_cabin
+      - sterilize_incubator
+      - preheat_incubator
+      - prepare_petri_dishes
+      - verify_incubator_ready
+      - mount_petri_dishes
+      - request_sampling_authorization
+      - open_petri_dishes
+    goal_conditions:
+      cabin_environment: CLEARED
+      incubator: READY
+      ground_link: AUTHORIZED
+      petri_dishes: OPEN
+
+  - task_id: micro_003
+    difficulty: hard
+    tags: [full_experiment, incubation, imaging, return]
+    nl_goal: "执行完整空气微生物采样实验，包含培养、拍照与样品封装回收"
+    nl_goal_en: "Execute full air microbial sampling experiment including incubation, imaging, and sample packaging"
+    expected_skills:
+      - clear_cabin
+      - sterilize_incubator
+      - preheat_incubator
+      - prepare_petri_dishes
+      - verify_incubator_ready
+      - mount_petri_dishes
+      - request_sampling_authorization
+      - open_petri_dishes
+      - seal_petri_dishes
+      - transfer_to_incubator
+      - photograph_colonies
+      - package_for_return
+    goal_conditions:
+      petri_dishes: ARCHIVED
+
+  - task_id: micro_004
+    difficulty: easy
+    tags: [post_sampling, sealing]
+    nl_goal: "采样结束：立即封盖密封培养皿并移入培养箱"
+    nl_goal_en: "End of sampling: immediately seal petri dishes and transfer to incubator"
+    expected_skills:
+      - seal_petri_dishes
+      - transfer_to_incubator
+    goal_conditions:
+      petri_dishes: INCUBATING
+
+  - task_id: micro_005
+    difficulty: medium
+    tags: [post_incubation, imaging, packaging]
+    nl_goal: "培养结束后处理：拍摄菌落形态并封装样品准备返回"
+    nl_goal_en: "Post-incubation processing: photograph colony morphology and package samples for return"
+    expected_skills:
+      - photograph_colonies
+      - package_for_return
+    goal_conditions:
+      petri_dishes: ARCHIVED

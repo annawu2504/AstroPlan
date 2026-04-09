@@ -1,0 +1,91 @@
+# Fiber-Composite-Lab evaluation task suite
+# Tasks derived from 空间连续纤维增强复合材料原位成型实验说明书
+
+lab_id: fiber-composite-lab
+
+tasks:
+
+  - task_id: fiber_001
+    difficulty: easy
+    tags: [preparation, preheat]
+    nl_goal: "预热碳纤维打印系统：启动真空、加热喷头与平台、归零打印头"
+    nl_goal_en: "Preheat the carbon fiber print system: start vacuum, heat nozzle and platform, home printhead"
+    expected_skills:
+      - enable_vacuum_exhaust
+      - preheat_nozzle
+      - preheat_platform
+      - home_printhead
+    goal_conditions:
+      vacuum_system: RUNNING
+      print_nozzle: READY
+      build_platform: READY
+      motion_system: READY
+
+  - task_id: fiber_002
+    difficulty: medium
+    tags: [first_layer, ground_auth, scanning]
+    nl_goal: "完成碳纤维首层沉积与质量扫描"
+    nl_goal_en: "Complete carbon fiber first layer deposition and quality scan"
+    expected_skills:
+      - enable_vacuum_exhaust
+      - preheat_nozzle
+      - preheat_platform
+      - home_printhead
+      - request_bacc_authorization
+      - start_first_layer
+      - scan_spreading_ratio
+    goal_conditions:
+      vacuum_system: RUNNING
+      print_nozzle: READY
+      build_platform: READY
+      motion_system: READY
+      ground_link: AUTHORIZED
+      print_job: FIRST_LAYER
+
+  - task_id: fiber_003
+    difficulty: hard
+    tags: [full_experiment, forming, cutting, cooling]
+    nl_goal: "执行完整的空间碳纤维复合材料原位成型实验"
+    nl_goal_en: "Execute full space in-situ carbon fiber composite forming experiment"
+    expected_skills:
+      - enable_vacuum_exhaust
+      - preheat_nozzle
+      - preheat_platform
+      - home_printhead
+      - request_bacc_authorization
+      - start_first_layer
+      - scan_spreading_ratio
+      - ramp_fiber_tension
+      - execute_main_forming
+      - cut_fiber
+      - cool_platform
+    goal_conditions:
+      print_job: COMPLETE
+      build_platform: COLD
+      fiber_tension: STABLE
+
+  - task_id: fiber_004
+    difficulty: easy
+    tags: [emergency, abort]
+    nl_goal: "打印异常，立即紧急中止实验"
+    nl_goal_en: "Printing anomaly detected — emergency abort experiment"
+    expected_skills:
+      - emergency_stop_print
+    goal_conditions: {}
+
+  - task_id: fiber_005
+    difficulty: medium
+    tags: [diagnostic, preparation]
+    nl_goal: "检查张力传感器读数后启动打印系统预热准备"
+    nl_goal_en: "Check tension sensor reading then warm up print system for preparation"
+    expected_skills:
+      - read_tension_sensor
+      - enable_vacuum_exhaust
+      - preheat_nozzle
+      - preheat_platform
+      - home_printhead
+    goal_conditions:
+      vacuum_system: RUNNING
+      print_nozzle: READY
+      build_platform: READY
+      motion_system: READY

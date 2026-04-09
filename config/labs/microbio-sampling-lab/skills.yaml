@@ -1,0 +1,158 @@
+# Microbio-Sampling-Lab skill catalog
+# Tianhe core module air microbial sampling experiment
+# Based on: 天和核心舱空气微生物采样实验说明书
+
+skills:
+
+  - name: clear_cabin
+    description: >
+      Direct non-experiment crew to leave Tianhe core module and close
+      the hatch. Experimenter dons gloves, mask, and sterile garment to
+      prevent sample contamination. Required before mounting petri dishes.
+    subsystem: cabin_environment
+    subsystem_state: CLEARED
+    fsm_action: clear_cabin
+    telemetry_effects:
+      cabin_personnel: 0
+    result_fields: {}
+
+  - name: sterilize_incubator
+    description: >
+      Wipe incubator interior walls with isopropanol (IPA) cloth, close
+      door. Preparatory hygiene step — does not change FSM state.
+    subsystem: null
+    subsystem_state: null
+    fsm_action: null
+    telemetry_effects:
+      incubator_cleanliness: 1.0
+    result_fields: {}
+
+  - name: preheat_incubator
+    description: >
+      Set incubator to 36 ±1°C. Begins warming phase; use
+      verify_incubator_ready to confirm temperature reached before
+      opening petri dishes.
+    subsystem: incubator
+    subsystem_state: WARMING
+    fsm_action: preheat_incubator
+    telemetry_effects:
+      incubator_temp_c: 30.0
+    result_fields: {}
+
+  - name: prepare_petri_dishes
+    description: >
+      Retrieve three sealed agar petri dishes from cargo package 9-2.
+      Wipe outer surfaces with IPA. Attach position-number labels (2, 15,
+      60). Confirm media integrity: no condensation or pre-existing
+      colonies.
+    subsystem: petri_dishes
+    subsystem_state: PREPARED
+    fsm_action: prepare_petri_dishes
+    telemetry_effects:
+      dishes_prepared: 3
+    result_fields: {}
+
+  - name: verify_incubator_ready
+    description: >
+      Confirm incubator has reached 36 ±1°C setpoint. Transitions
+      incubator to READY. Must be done before opening petri dishes to
+      ensure viable culture conditions immediately after sampling.
+    subsystem: incubator
+    subsystem_state: READY
+    fsm_action: verify_incubator_ready
+    telemetry_effects:
+      incubator_temp_c: 36.0
+    result_fields:
+      incubator_temp_c: 36.0
+
+  - name: mount_petri_dishes
+    description: >
+      Fix the three prepared petri dishes at sampling anchor points 2,
+      15, and 60 using Velcro straps. Requires cabin CLEARED (no other
+      crew). Shake gently to confirm the Velcro/latch is fully locked.
+    subsystem: petri_dishes
+    subsystem_state: MOUNTED
+    fsm_action: mount_petri_dishes
+    telemetry_effects:
+      mounted_positions: "2,15,60"
+    result_fields: {}
+
+  - name: request_sampling_authorization
+    description: >
+      Report status to ground control center and request authorization
+      to begin air sampling. Required before opening petri dishes — every
+      critical step must be confirmed by ground per safety protocol.
+    subsystem: ground_link
+    subsystem_state: AUTHORIZED
+    fsm_action: request_sampling_authorization
+    telemetry_effects:
+      ground_auth_received: 1
+    result_fields:
+      authorized: true
+
+  - name: open_petri_dishes
+    description: >
+      Open all three petri dish lids simultaneously to begin passive
+      air sampling. Experimenter holds breath and retreats ≥2 m from
+      each dish. Starts 20-minute sampling timer. Requires ground
+      authorization and incubator at 36°C (READY).
+    subsystem: petri_dishes
+    subsystem_state: OPEN
+    fsm_action: open_petri_dishes
+    telemetry_effects:
+      sampling_started: 1
+      sampling_timer_s: 0
+    result_fields: {}
+
+  - name: seal_petri_dishes
+    description: >
+      After 20-minute sampling period: quickly replace all lids and
+      seal with parafilm as shown in diagram. Place sealed dishes into
+      sample bags. Do not touch the agar surface.
+    subsystem: petri_dishes
+    subsystem_state: SEALED_POST
+    fsm_action: seal_petri_dishes
+    telemetry_effects:
+      sampling_duration_min: 20.0
+      sampling_started: 0
+    result_fields: {}
+
+  - name: transfer_to_incubator
+    description: >
+      Place sealed petri dishes into the 36°C incubator. Requires
+      incubator READY and dishes SEALED_POST. Incubation will run
+      48–72 hours (simulated as mock completion).
+    subsystem: petri_dishes
+    subsystem_state: INCUBATING
+    fsm_action: transfer_to_incubator
+    telemetry_effects:
+      incubator_status: INCUBATING
+      dishes_in_incubator: 3
+    result_fields: {}
+
+  - name: photograph_colonies
+    description: >
+      After 48–72 h incubation: photograph colony morphology with
+      high-resolution camera. Upload images to ground database.
+      Transitions petri dishes to ARCHIVED state.
+    subsystem: petri_dishes
+    subsystem_state: ARCHIVED
+    fsm_action: photograph_colonies
+    telemetry_effects:
+      colony_images: 3
+      incubation_complete: 1
+    result_fields:
+      colony_images: 3
+
+  - name: package_for_return
+    description: >
+      Place all archived petri dishes into bio-sample recovery box
+      (cargo slot 8-1). Confirm seal integrity. All samples must be
+      loaded before the next crewed spacecraft return window.
+    subsystem: null
+    subsystem_state: null
+    fsm_action: null
+    telemetry_effects:
+      packaged_for_return: 1
+    result_fields:
+      packaged: true

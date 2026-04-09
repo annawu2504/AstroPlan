@@ -76,6 +76,8 @@ class MockScheduler:
         self.submitted_revisions: List[str] = []
         self.total_nodes_executed: int = 0
         self.total_failures: int = 0
+        # Ordered list of skill names successfully executed (across all revisions)
+        self.executed_skill_names: List[str] = []
 
     # ------------------------------------------------------------------
     # ISchedulerAdapter implementation
@@ -143,6 +145,7 @@ class MockScheduler:
 
                 self._node_states[node.node_id] = NodeStatus.COMPLETED
                 self.total_nodes_executed += 1
+                self.executed_skill_names.append(node.skill_name)
                 print(
                     f"[MockScheduler] ✓ {node.skill_name} "
                     f"(lineage={node.lineage_id})"
