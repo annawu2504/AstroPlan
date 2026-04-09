@@ -2,12 +2,24 @@ lab_id: "Fluid-Lab-Demo"
 bandwidth_kbps: 200
 
 llm:
+  # backend: "mock" | "anthropic" | "hf_local"
+  # "mock"      → built-in rule-based planner, no GPU required
+  # "anthropic" → Anthropic API (requires ANTHROPIC_API_KEY env var)
+  # "hf_local"  → local HuggingFace model (see files/INFERENCE.md)
+  backend: "mock"
+  use_mock: true
+
+  # Anthropic settings (backend: anthropic)
   model: "claude-sonnet-4-6"
   api_key: "${ANTHROPIC_API_KEY}"
   max_tokens: 2048
   temperature: 0.2
-  # Set use_mock: true to run without an API key (rule-based planner)
-  use_mock: true
+
+  # Local-model settings (backend: hf_local)
+  # model_path: "Qwen/Qwen3-4B"          # HF Hub ID or local path
+  # device: "auto"                        # "auto" | "cuda" | "cuda:0" | "cpu"
+  # load_in_4bit: false                   # NF4 quant — saves ~75% VRAM
+  # load_in_8bit: false                   # INT8 quant — saves ~50% VRAM
 
 mcp:
   compress: true

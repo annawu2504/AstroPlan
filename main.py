@@ -30,9 +30,42 @@ from src.evaluation import MockScheduler
 
 
 def _make_llm_client(cfg):
-    """Return an LLM client if ANTHROPIC_API_KEY is set, else None."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    """Return an LLM client based on cfg.llm.backend, or None for mock/rule planner.
+
+    Supported backends
+    ------------------
+    "mock"      → None  (rule-based AgentNode fallback, no LLM)
+    "hf_local"  → HFLocalClient (HuggingFace Transformers, local GPU/CPU)
+    "anthropic" → Anthropic API client (requires ANTHROPIC_API_KEY)
+    """
+    backend = cfg.llm.backend
+
+    # Explicit mock or use_mock flag → no LLM
+    if cfg.llm.use_mock or backend == "mock":
+        print("[main] LLM backend: mock (rule-based planner)")
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Local HuggingFace inference                                          #
+    # ------------------------------------------------------------------ #
+    if backend == "hf_local":
+        from src.llm import HFLocalClient
+        model_id = cfg.llm.model_path or cfg.llm.model
+        return HFLocalClient(
+            model_name_or_path=model_id,
+            max_new_tokens=cfg.llm.max_tokens,
+            device=cfg.llm.device,
+            load_in_4bit=cfg.llm.load_in_4bit,
+            load_in_8bit=cfg.llm.load_in_8bit,
+            temperature=cfg.llm.temperature,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Anthropic API                                                        #
+    # ------------------------------------------------------------------ #
+    api_key = cfg.llm.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
+        print("[main] No ANTHROPIC_API_KEY — using built-in planner.")
         return None
     try:
         import anthropic

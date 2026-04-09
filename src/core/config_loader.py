@@ -35,6 +35,12 @@ class LLMConfig:
     max_tokens: int = 2048
     temperature: float = 0.2
     use_mock: bool = True
+    # Local-inference fields (used when backend == "hf_local")
+    backend: str = "anthropic"   # "anthropic" | "hf_local" | "mock"
+    model_path: str = ""         # HF model ID or local directory path
+    device: str = "auto"         # "auto" | "cuda" | "cpu"
+    load_in_4bit: bool = False
+    load_in_8bit: bool = False
 
 
 @dataclass
@@ -90,6 +96,11 @@ def load_config(path: str = "./config/config.yaml") -> AppConfig:
             max_tokens=llm_d.get("max_tokens", 2048),
             temperature=llm_d.get("temperature", 0.2),
             use_mock=llm_d.get("use_mock", True),
+            backend=llm_d.get("backend", "anthropic"),
+            model_path=llm_d.get("model_path", ""),
+            device=llm_d.get("device", "auto"),
+            load_in_4bit=llm_d.get("load_in_4bit", False),
+            load_in_8bit=llm_d.get("load_in_8bit", False),
         ),
         mcp=MCPConfig(compress=mcp_d.get("compress", True)),
         orchestrator=OrchestratorConfig(

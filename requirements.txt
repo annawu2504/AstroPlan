@@ -7,8 +7,15 @@
 # Config
 pyyaml>=6.0
 
-# LLM (optional — only needed for real planning, not mock demo)
+# LLM — Anthropic API backend (optional)
 anthropic>=0.30.0
+
+# LLM — local HuggingFace backend (optional, see files/INFERENCE.md)
+# Install these inside the conda env before running with backend: hf_local
+# transformers>=4.40.0
+# accelerate>=0.30.0
+# torch>=2.2.0          # or torch with CUDA: see INFERENCE.md
+# bitsandbytes>=0.43.0  # required only for load_in_4bit / load_in_8bit
 
 # Vector search (optional — for future dense-embedding milestone engine)
 # faiss-cpu>=1.7.4
