@@ -20,14 +20,17 @@ llm:
   # device: "auto"                        # "auto" | "cuda" | "cuda:0" | "cpu"
   # load_in_4bit: false                   # NF4 quant — saves ~75% VRAM
   # load_in_8bit: false                   # INT8 quant — saves ~50% VRAM
-  backend: "hf_local"
-  use_mock: false
-  model_path: "./models/gemma-4-2b-it"
+  # Recommended: Qwen/Qwen2.5-3B-Instruct (open-weight, no login, ~6 GB)
+  #              meta-llama/Llama-3.1-8B-Instruct (~16 GB or 4-bit: ~5 GB)
+  #              google/gemma-2-2b-it (~5 GB)
+  backend: "mock"
+  use_mock: true
+  model_path: "Qwen/Qwen2.5-3B-Instruct"  # change to your downloaded path
   device: "auto"
   load_in_4bit: false
   load_in_8bit: false
   max_tokens: 512
-  temperature: 0.2
+  temperature: 0.1
   
 mcp:
   compress: true

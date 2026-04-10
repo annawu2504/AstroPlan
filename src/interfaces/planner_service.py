@@ -16,7 +16,7 @@ The Scheduler drives the conversation:
        ))
 
     3. Standalone benchmark (no external Scheduler):
-       result = await planner.execute_standalone("进行流体实验")
+       result = await planner.execute_standalone({lab_name})
 
 AstroPlan is stateless between plan() calls — all execution state is
 provided by the caller in PlanRequest.  The planner never calls back into

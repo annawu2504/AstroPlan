@@ -64,7 +64,8 @@ AstroPlan/
     │   └── hardware_executor.py # HardwareExecutor (TransactionID 异步)
     ├── memory/
     │   ├── working_memory.py    # WorkingMemory → SharedContext
-    │   └── milestone_engine.py  # MilestoneEngine (离线索引 / 在线检索)
+    │   ├── milestone_engine.py  # MilestoneEngine (4-tuple 离线索引 / BM25 检索 / FSM 过滤)
+    │   └── skill_library.py     # SkillLibrary (历史执行技能模式提取 / JSON 持久化)
     ├── control/
     │   ├── dag_builder.py       # DAGBuilder（含控制流感知 API + to_plan_response()）
     │   └── output_controller.py # OutputController (序列化 / 树视图格式化)
@@ -146,6 +147,12 @@ class IStatusReporter(Protocol):
 | `AgentDecision` | AgentNode 输出（Think / Act / Expand） |
 | `EventTriggerSignal` | 重规划触发信号（统一来源：地面指令 / 遥测 / HITL） |
 | `ExecutionResult` | 任务最终结果（status / steps / log） |
+| `Milestone` | 4-tuple 里程碑（`task_vector` + `state_description` + `trajectory` + `constraints`） |
+| `AtomicSkillRecord` | 轨迹片段中的单步技能记录（强类型，替代裸 dict） |
+| `TaskVector` | 任务向量（BM25 关键词 + 可选稠密向量） |
+| `MilestoneStateDescription` | 里程碑状态描述（FSM 状态 + 已完成技能 + 描述） |
+| `TrajectoryFragment` | 轨迹片段（有序 `AtomicSkillRecord` 列表 + 成功率 + 观测次数） |
+| `PhysicalConstraints` | 物理约束（FSM 前置/后置条件 + 安全阈值） |
 
 ---
 
@@ -308,10 +315,19 @@ llm:
 ### 3. 运行演示
 
 ```bash
+# 默认 Fluid-Lab-Demo（mock 规划器，无 GPU 需求）
 python main.py
+
+# 指定实验室
+python main.py --lab fiber-composite-lab
+python main.py --lab microbio-sampling-lab
+
+# ALFRED/WAH 兼容基准评测
+python main.py --benchmark --lab fiber-composite-lab
+python main.py --benchmark --lab all   # 全部三个实验室
 ```
 
-**预期输出（Fluid-Lab-Demo，无 LLM）：**
+**预期输出（Fluid-Lab-Demo，mock 规划器）：**
 
 ```
 [Fluid-Lab-Demo] Mission: 进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。
@@ -329,6 +345,19 @@ python main.py
   nodes run    : 3
   failures     : 0
 ```
+
+### 4. 本地 LLM 推理（可选）
+
+```
+
+**验证中的模型：**
+
+| 模型 | VRAM | 
+|---|---|
+| `Qwen/Qwen2.5-3B-Instruct` | ~6 GB | 
+| `meta-llama/Llama-3.1-8B-Instruct` | ~16 GB (4-bit: ~5 GB) | 
+| `google/gemma-4-E2B` | ~5 GB | 
+
 
 ---
 
@@ -456,3 +485,18 @@ numpy>=1.24.0            # MilestoneEngine 向量检索
 ```
 
 > Mock 规划器 + Mock 环境模式下仅需 `pyyaml`。
+
+---
+
+## 故障排查
+
+| 症状 | 原因 | 解决方案 |
+|---|---|---|
+| `ValueError: model type 'gemma4' not recognized` | transformers 版本过旧 | `pip install -U transformers`（需 ≥ 4.51） |
+| `[AstroPlan] rev_001: 0 node(s), 0 edge(s)` | LLM 返回 Think 或解析失败 | 查看 `[AgentNode]` 日志行；降低 temperature（0.1）；检查模型是否为 instruct 版本 |
+| `[AgentNode] No JSON object in LLM response` | 模型未遵循 JSON 格式 | 确认使用 instruct 模型（非 base）；AstroPlan 会自动重试并回退 mock 规划器 |
+| `CUDA out of memory` | 模型超出显存 | 设置 `load_in_4bit: true` 或使用更小的模型 |
+| `ImportError: bitsandbytes` | 缺少量化包 | `pip install bitsandbytes>=0.43.0` |
+| `GatedRepoError` (Gemma/Llama) | 需要 HF 许可证 | 在 huggingface.co 接受许可，然后 `huggingface-cli login` |
+| benchmark GC=0 for all tasks | LLM 0 节点 + 无 mock 回退（旧版） | 升级至最新代码，mock 回退已内置 |
+| `ControlFlowNode: Unknown control_type` | LLM 返回小写 "sequence" | 已修复：控制类型现自动归一化 |

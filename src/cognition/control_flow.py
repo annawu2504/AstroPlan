@@ -1,9 +1,9 @@
 """ControlFlowNode — Layer 4 control flow coordinator.
 
 Aggregates results from child AgentNodes according to a control type:
-  Sequence  — all children must succeed
-  Fallback  — first success wins
-  Parallel  — majority vote
+  Sequence  — all children must succeed; short-circuits on first failure
+  Fallback  — first success wins; short-circuits on first success
+  Parallel  — all children always run; succeeds only if ALL succeed
 """
 from __future__ import annotations
 
@@ -21,11 +21,19 @@ class ControlFlowNode:
     PARALLEL = "Parallel"
 
     def __init__(self, control_type: str = "Sequence", depth: int = 0):
+        # Normalise casing — LLM may return "sequence" instead of "Sequence"
+        _normalised = {
+            "sequence": self.SEQUENCE,
+            "fallback": self.FALLBACK,
+            "parallel": self.PARALLEL,
+        }
+        control_type = _normalised.get(control_type.lower(), control_type)
         if control_type not in (self.SEQUENCE, self.FALLBACK, self.PARALLEL):
-            raise ValueError(
-                f"Unknown control_type '{control_type}'. "
-                f"Must be Sequence, Fallback, or Parallel."
+            print(
+                f"[ControlFlowNode] Unknown control_type '{control_type}' — "
+                f"defaulting to Sequence."
             )
+            control_type = self.SEQUENCE
         self.control_type = control_type
         self.depth = depth
         self.children: List[Any] = []
@@ -41,8 +49,9 @@ class ControlFlowNode:
         if self.control_type == self.FALLBACK:
             return any(children_results)
 
-        # PARALLEL — majority vote
-        return children_results.count(True) > len(children_results) // 2
+        # PARALLEL — all children must succeed (matches ReAcTree semantics).
+        # Every child always runs (no short-circuit); a single failure is fatal.
+        return all(children_results)
 
     async def run(
         self,

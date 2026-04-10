@@ -79,12 +79,10 @@ class HFLocalClient:
             model_name_or_path,
             trust_remote_code=True,
         )
-        self._model = AutoModelForCausalLM.from_pretrained(
+        self._model = _load_model(
             model_name_or_path,
             device_map=device,
-            torch_dtype="auto",
-            quantization_config=quant_cfg,
-            trust_remote_code=True,
+            quant_cfg=quant_cfg,
         )
         self._max_new_tokens = max_new_tokens
         self._temperature = temperature
@@ -150,6 +148,154 @@ class HFLocalClient:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _load_model(model_name_or_path: str, *, device_map: str, quant_cfg):
+    """Load a causal LM, automatically upgrading *transformers* if the architecture
+    is not recognised by the currently installed version.
+
+    Loading strategy (each stage only runs if the previous one fails with
+    "does not recognize this architecture"):
+
+    1. Standard ``AutoModelForCausalLM.from_pretrained`` with
+       ``trust_remote_code=True`` — works for all models whose architecture is
+       already known to the installed transformers.
+
+    2. Dynamic Hub module loading — for models that ship a custom
+       ``modeling_*.py`` in their Hub repo (e.g. older Qwen community uploads).
+       Uses ``auto_map`` from the model config to locate the class.
+
+    3. ``pip install --upgrade transformers`` (stable PyPI) then reload and
+       retry — covers newly released model types like ``gemma4`` (needs
+       transformers ≥ 5.5.0) and ``qwen3`` that land in stable releases shortly
+       after the model is published.
+
+    4. ``pip install git+https://github.com/huggingface/transformers`` (dev HEAD)
+       then reload and retry — for architectures that exist in the dev branch
+       but have not yet been cut into a stable release.
+
+    5. If all four stages fail, raise ``RuntimeError`` with a full diagnostic
+       (installed version, detected model type, exact pip commands to try).
+    """
+    import sys
+
+    _common_kwargs = dict(
+        device_map=device_map,
+        torch_dtype="auto",
+        quantization_config=quant_cfg,
+        trust_remote_code=True,
+    )
+
+    def _fresh_load():
+        """Import AutoModelForCausalLM fresh (picks up any in-process upgrade)."""
+        from transformers import AutoModelForCausalLM as _Auto
+        return _Auto.from_pretrained(model_name_or_path, **_common_kwargs)
+
+    def _purge_transformers_cache():
+        """Remove all transformers sub-modules from sys.modules so the next
+        import picks up the newly installed wheel."""
+        for key in list(sys.modules.keys()):
+            if key == "transformers" or key.startswith("transformers."):
+                del sys.modules[key]
+
+    def _pip_install(spec: str) -> bool:
+        """Run pip install *spec* quietly; return True on success."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", spec],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"[HFLocalClient] pip install '{spec}' failed:\n{result.stderr.strip()}")
+            return False
+        return True
+
+    def _detect_model_type() -> str:
+        try:
+            from transformers import AutoConfig
+            cfg = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+            return getattr(cfg, "model_type", "unknown")
+        except Exception:
+            return "unknown"
+
+    # ── Stage 1: standard Auto routing ───────────────────────────────────
+    try:
+        return _fresh_load()
+    except ValueError as exc1:
+        if "does not recognize this architecture" not in str(exc1):
+            raise
+        first_exc = exc1
+
+    # ── Stage 2: dynamic Hub module (auto_map in model config) ───────────
+    print(
+        f"[HFLocalClient] Architecture not recognised in installed transformers; "
+        "trying dynamic Hub module …"
+    )
+    try:
+        from transformers import AutoConfig
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+        auto_map: dict = getattr(config, "auto_map", {})
+        cls_path = auto_map.get("AutoModelForCausalLM")
+        if not cls_path:
+            raise ValueError("No AutoModelForCausalLM in auto_map — skipping stage 2.")
+        model_cls = get_class_from_dynamic_module(cls_path, model_name_or_path)
+        return model_cls.from_pretrained(model_name_or_path, **_common_kwargs)
+    except Exception as exc2:
+        print(f"[HFLocalClient] Dynamic Hub module failed: {exc2}")
+
+    # ── Stage 3: upgrade transformers (stable PyPI) and retry ─────────────
+    import transformers as _tf_before
+    print(
+        f"[HFLocalClient] Attempting 'pip install --upgrade transformers' "
+        f"(current: {_tf_before.__version__}) …"
+    )
+    if _pip_install("--upgrade transformers"):
+        _purge_transformers_cache()
+        try:
+            return _fresh_load()
+        except ValueError as exc3:
+            if "does not recognize this architecture" not in str(exc3):
+                raise
+            print("[HFLocalClient] Stable upgrade insufficient; trying dev branch …")
+    else:
+        print("[HFLocalClient] Stable upgrade failed; trying dev branch …")
+
+    # ── Stage 4: upgrade transformers from git HEAD and retry ─────────────
+    _GIT_SOURCE = "git+https://github.com/huggingface/transformers.git"
+    print(f"[HFLocalClient] Attempting 'pip install {_GIT_SOURCE}' …")
+    if _pip_install(_GIT_SOURCE):
+        _purge_transformers_cache()
+        try:
+            return _fresh_load()
+        except ValueError as exc4:
+            if "does not recognize this architecture" not in str(exc4):
+                raise
+            print("[HFLocalClient] Dev-branch install also did not resolve the architecture.")
+
+    # ── All stages exhausted ──────────────────────────────────────────────
+    model_type = _detect_model_type()
+    try:
+        _purge_transformers_cache()
+        import transformers as _tf_after
+        installed_ver = _tf_after.__version__
+    except Exception:
+        installed_ver = "(unknown — import failed after upgrade attempt)"
+
+    raise RuntimeError(
+        f"Cannot load model '{model_name_or_path}' (model_type='{model_type}').\n"
+        f"transformers version after upgrade attempts : {installed_ver}\n"
+        f"\n"
+        f"Known minimum requirements:\n"
+        f"  gemma4  →  transformers >= 5.5.0\n"
+        f"  qwen3   →  transformers >= 4.51.0\n"
+        f"\n"
+        f"Manual fix options:\n"
+        f"  pip install --upgrade transformers\n"
+        f"  pip install git+https://github.com/huggingface/transformers.git\n"
+    ) from first_exc
+
 
 def _strip_thinking_block(text: str) -> str:
     """Remove <think>…</think> prefix produced by Qwen3 thinking-mode models.

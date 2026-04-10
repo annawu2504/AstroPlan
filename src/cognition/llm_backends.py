@@ -57,8 +57,22 @@ generation is not needed when the model is instructed to output JSON.
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from typing import Any, Dict, Optional
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _strip_thinking_block(text: str) -> str:
+    """Remove <think>…</think> prefix produced by Qwen3 / DeepSeek-R1 models.
+
+    These models emit a reasoning block before the actual JSON answer.
+    Stripping it ensures _parse_llm_response can locate the { token.
+    """
+    return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -168,22 +182,51 @@ class HuggingFaceBackend(LLMBackend):
         if load_in_8bit:
             model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
 
-        self._pipe = pipeline(
-            "text-generation",
-            model=model_name,
-            device_map=device_map,
-            model_kwargs=model_kwargs,
-        )
+        try:
+            self._pipe = pipeline(
+                "text-generation",
+                model=model_name,
+                device_map=device_map,
+                model_kwargs=model_kwargs,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"HuggingFaceBackend: cannot load '{model_name}': {exc}. "
+                "Run `pip install -U transformers` or choose a supported model."
+            ) from exc
         self.max_new_tokens = max_new_tokens
 
     def call(self, prompt: str) -> str:
+        """Run inference, applying chat template for instruct models.
+
+        Instruct-tuned models (Llama-3.1-8B-Instruct, Qwen2.5-Instruct, etc.)
+        require special tokens around the user turn.  Without the template the
+        model sees raw continuation text and ignores the JSON instruction.
+        """
+        tokenizer = self._pipe.tokenizer
+        formatted_prompt = prompt
+        if (
+            hasattr(tokenizer, "apply_chat_template")
+            and tokenizer.chat_template
+        ):
+            try:
+                formatted_prompt = tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            except Exception:
+                pass  # fall through to raw prompt if template application fails
+
         result = self._pipe(
-            prompt,
+            formatted_prompt,
             max_new_tokens=self.max_new_tokens,
             do_sample=False,
             return_full_text=False,
         )
-        return result[0]["generated_text"]
+        raw = result[0]["generated_text"]
+        # Strip <think>...</think> reasoning blocks emitted by Qwen3 etc.
+        return _strip_thinking_block(raw)
 
 
 # ---------------------------------------------------------------------------

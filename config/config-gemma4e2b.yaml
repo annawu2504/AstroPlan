@@ -1,0 +1,25 @@
+lab_id: "Fluid-Lab-Demo"
+bandwidth_kbps: 200
+
+llm:
+  backend: "hf_local"
+  use_mock: false
+  model_path: "/home/wyx/models/gemma-4-E2B"
+  device: "auto"
+  load_in_4bit: false
+  load_in_8bit: false
+  max_tokens: 512
+  temperature: 0.1
+  
+mcp:
+  compress: true
+
+orchestrator:
+  max_replan_depth: 3
+  hitl_timeout_s: 300
+  latency_threshold_ms: 5000
+
+web_monitor:
+  host: "0.0.0.0"
+  port: 8765
+  enabled: false

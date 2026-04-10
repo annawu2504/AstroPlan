@@ -6,7 +6,9 @@ All fields use typing-module generics for Python 3.8+ compatibility.
 Type groups
 -----------
 Primitive identifiers      TransactionID
-Observation / memory       SharedContext, Milestone
+Observation / memory       SharedContext
+Milestone (4-tuple)        AtomicSkillRecord, TaskVector, MilestoneStateDescription,
+                           TrajectoryFragment, PhysicalConstraints, Milestone
 Planning / cognition       AgentDecision
 Events / signals           DeviationEvent, EventTriggerSignal, InterventionSignal, ResumeSignal
 Execution                  ExecutionResult
@@ -51,11 +53,94 @@ class SharedContext:
 
 
 @dataclass
+class AtomicSkillRecord:
+    """One executed skill step — strongly typed element of a TrajectoryFragment.
+
+    Maps 1:1 to a PlanNode during DAG seeding; replaces bare Dict in trajectory lists.
+    """
+    skill_name: str
+    params: Dict[str, Any] = field(default_factory=dict)
+    subsystem: str = ""
+    result: Optional[Dict[str, Any]] = None   # outcome from MCPRegistry.call()
+    duration_ms: int = 0
+
+
+@dataclass
+class TaskVector:
+    """Semantic representation of a task goal used for milestone retrieval.
+
+    keywords is always populated (BM25 mode).
+    embedding is optional; MilestoneEngine falls back to BM25 when None.
+    """
+    mission_id: str
+    goal_text: str
+    keywords: List[str]                       # BM25 tokens; always populated
+    embedding: Optional[List[float]] = None   # dense vector; None = BM25-only mode
+
+
+@dataclass
+class MilestoneStateDescription:
+    """World state that must hold for this milestone to be applicable.
+
+    Used by MilestoneEngine.filter_applicable() to discard milestones whose
+    preconditions are incompatible with the current FSM state.
+    """
+    subsystem_states: Dict[str, str] = field(default_factory=dict)
+    telemetry_snapshot: Dict[str, Any] = field(default_factory=dict)
+    completed_skills: List[str] = field(default_factory=list)
+    description: str = ""
+
+
+@dataclass
+class TrajectoryFragment:
+    """Ordered sequence of atomic skill records forming one trajectory segment.
+
+    Replaces List[Dict[str, Any]] — all steps are strongly typed AtomicSkillRecord
+    objects so they can be directly seeded into DAGBuilder.seed_completed_node().
+    """
+    steps: List[AtomicSkillRecord] = field(default_factory=list)
+    control_flow: str = "Sequence"     # "Sequence" | "Parallel" | "Fallback"
+    total_duration_ms: int = 0
+    success_rate: float = 1.0          # historical success ratio
+    observation_count: int = 1         # how many times this pattern was observed
+
+
+@dataclass
+class PhysicalConstraints:
+    """FSM and safety constraints governing when this milestone is applicable.
+
+    required_preconditions must match current subsystem FSM states before the
+    trajectory can be safely executed.  postconditions are asserted after.
+    """
+    required_preconditions: Dict[str, str] = field(default_factory=dict)
+    postconditions: Dict[str, str] = field(default_factory=dict)
+    safety_thresholds: Dict[str, float] = field(default_factory=dict)
+    interruptible: bool = True
+
+
+@dataclass
 class Milestone:
-    """A retrieved expert trajectory snippet used as a few-shot prompt hint."""
-    goal: str
-    trajectory: List[Dict[str, Any]] = field(default_factory=list)
-    score: float = 0.0  # retrieval relevance score (higher = more relevant)
+    """4-tuple milestone: task vector + state description + trajectory + constraints.
+
+    Used by MilestoneEngine for retrieval and by SkillLibrary for pattern storage.
+    score is populated at retrieval time by MilestoneEngine.retrieve() and is not
+    persisted in the index.
+
+    Fields
+    ------
+    milestone_id:        sha256(goal_text + step_names)[:12] — stable content hash
+    task_vector:         semantic goal representation for BM25 / dense retrieval
+    state_description:   world state at which this milestone is applicable (precondition)
+    trajectory:          ordered skill steps to execute
+    constraints:         FSM pre/postconditions and safety thresholds
+    score:               retrieval-time relevance score (higher = more relevant)
+    """
+    milestone_id: str
+    task_vector: TaskVector
+    state_description: MilestoneStateDescription
+    trajectory: TrajectoryFragment
+    constraints: PhysicalConstraints
+    score: float = 0.0
 
 
 # ---------------------------------------------------------------------------

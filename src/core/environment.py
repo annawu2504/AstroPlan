@@ -102,6 +102,11 @@ class LaboratoryEnvironment:
             node_id="root",
             llm_client=self._agent._llm if hasattr(self._agent, "_llm") else None,
             depth=0,
+            available_skills=(
+                self._mcp.skill_descriptions()
+                if hasattr(self._mcp, "skill_descriptions")
+                else {}
+            ),
         )
         root.goal = nl_goal
 
@@ -150,12 +155,42 @@ class LaboratoryEnvironment:
     @staticmethod
     def _skill_to_subsystem(skill: str) -> str:
         mapping = {
-            "activate_pump": "fluid_pump",
-            "heat_to_40": "thermal",
-            "cool_down": "thermal",
-            "activate_camera": "camera",
-            "centrifuge": "centrifuge",
-            "pressure_test": "pressure",
+            # Fluid-Lab-Demo
+            "activate_pump":        "fluid_pump",
+            "deactivate_pump":      "fluid_pump",
+            "heat_to_40":           "thermal",
+            "cool_down":            "thermal",
+            "activate_camera":      "camera",
+            "deactivate_camera":    "camera",
+            "read_telemetry":       "all",
+            "emergency_stop":       "all",
+            # Fiber-composite-lab
+            "enable_vacuum_exhaust":       "vacuum_system",
+            "preheat_nozzle":              "print_nozzle",
+            "preheat_platform":            "build_platform",
+            "home_printhead":              "motion_system",
+            "request_bacc_authorization":  "ground_link",
+            "start_first_layer":           "print_job",
+            "scan_spreading_ratio":        "print_job",
+            "ramp_fiber_tension":          "fiber_tension",
+            "execute_main_forming":        "print_job",
+            "cut_fiber":                   "print_job",
+            "cool_platform":               "build_platform",
+            "read_tension_sensor":         "fiber_tension",
+            "emergency_stop_print":        "all",
+            # Microbio-sampling-lab
+            "clear_cabin":                 "cabin_environment",
+            "sterilize_incubator":         "incubator",
+            "preheat_incubator":           "incubator",
+            "prepare_petri_dishes":        "petri_dishes",
+            "verify_incubator_ready":      "incubator",
+            "mount_petri_dishes":          "petri_dishes",
+            "request_sampling_authorization": "ground_link",
+            "open_petri_dishes":           "petri_dishes",
+            "seal_petri_dishes":           "petri_dishes",
+            "transfer_to_incubator":       "incubator",
+            "photograph_colonies":         "petri_dishes",
+            "package_for_return":          "petri_dishes",
         }
         return mapping.get(skill, "unknown")
 
