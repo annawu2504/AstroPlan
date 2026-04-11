@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List
 
+from src.cognition.runnable import RunnableNode
 from src.types import EventTriggerSignal, NodeRunContext, SharedContext, TreeExecutionResult
 
 
@@ -36,7 +37,7 @@ class ControlFlowNode:
             control_type = self.SEQUENCE
         self.control_type = control_type
         self.depth = depth
-        self.children: List[Any] = []
+        self.children: List[RunnableNode] = []
 
     def evaluate_children(self, children_results: List[bool]) -> bool:
         """Aggregate child success/failure flags and return the node's result."""
@@ -137,8 +138,20 @@ class ControlFlowNode:
                                 f"[{env.lab_id}] Replanner: {len(replan_ctx.new_plan)} step(s) "
                                 f"replanned after '{child.goal}' failed"
                             )
-                            # Lazy import to avoid circular dependency
+                            # Deferred import: control_flow and agent_node have a
+                            # mutual instantiation dependency (each creates the other
+                            # at runtime).  Module-level mutual imports would cause a
+                            # partial-module error at load time; deferring here is safe
+                            # because both modules are fully loaded before any mission run.
                             from src.cognition.agent_node import AgentNode
+                            # Pull the live skill catalog from the registry so that
+                            # replanned nodes use the correct lab's skills instead of
+                            # falling back to _DEFAULT_SKILL_SEQUENCE (P0-A fix).
+                            _replan_skills = (
+                                env._mcp.skill_descriptions()
+                                if hasattr(env, '_mcp') and hasattr(env._mcp, 'skill_descriptions')
+                                else {}
+                            )
                             replan_rctx = NodeRunContext(
                                 context=fresh_ctx,
                                 log=rctx.log,
@@ -150,6 +163,7 @@ class ControlFlowNode:
                                     node_id=f"replan_{step.get('goal', '?')}",
                                     llm_client=env._agent._llm if hasattr(env._agent, "_llm") else None,
                                     depth=self.depth + 1,
+                                    available_skills=_replan_skills,
                                 )
                                 rn.goal = step.get("skill", step.get("goal", "noop"))
                                 r = await rn.run(replan_rctx, step_id, decision_id)

@@ -9,6 +9,7 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional
 
+from src.cognition.control_flow import ControlFlowNode
 from src.types import AgentDecision, Milestone, NodeRunContext, SharedContext, TreeExecutionResult
 
 # Type alias for skill catalog: {name: description}
@@ -462,9 +463,6 @@ class AgentNode:
                 "reasoning": decision.reasoning,
                 "decision_id": decision_id,
             })
-
-            # Import here to avoid circular dependency
-            from src.cognition.control_flow import ControlFlowNode
 
             cf_node = ControlFlowNode(control_type=control_flow, depth=self.depth + 1)
             for idx, subgoal in enumerate(subgoals):

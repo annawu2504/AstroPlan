@@ -70,6 +70,7 @@ AstroPlan/
     │   ├── dag_builder.py       # DAGBuilder（含控制流感知 API + to_plan_response()）
     │   └── output_controller.py # OutputController (序列化 / 树视图格式化)
     ├── cognition/
+    │   ├── runnable.py          # ★ RunnableNode Protocol（解耦 AgentNode ↔ ControlFlowNode）
     │   ├── agent_node.py        # AgentNode（plan_mode 感知）
     │   ├── control_flow.py      # ControlFlowNode（Sequence / Fallback / Parallel）
     │   ├── replanner.py         # SubTreeReplanner
@@ -247,6 +248,7 @@ cfg      = load_config()
 interlock = InterlockEngine.from_yaml("config/fsm_rules.yaml", cfg.lab_id)
 registry = MCPRegistry()
 planner  = AstroPlan(cfg, interlock, registry)
+# 所有协作对象在构造时立即初始化；配置错误此时即抛出。
 
 # 无故障基线
 result = await planner.execute_standalone("进行流体实验...")

@@ -21,6 +21,12 @@ Usage — standalone benchmark
     scheduler = MockScheduler(registry, failure_rate=0.3, seed=42)
     result = await planner.execute_standalone("进行流体实验...", scheduler=scheduler)
 
+Usage — test injection
+----------------------
+    env = MockLaboratoryEnvironment(...)
+    planner = AstroPlan(config, interlock, registry, env=env)
+    # _build_components() is skipped; env is used directly.
+
 plan_mode flag
 --------------
 plan_mode=True  (inside plan())
@@ -36,14 +42,31 @@ from __future__ import annotations
 import hashlib
 from typing import Any, List, Optional
 
+from src.application.ground_command_receiver import GroundCommandReceiver
+from src.application.hitl_operator import HITLSuspensionOperator
+from src.application.web_monitor import WebMonitor
+from src.cognition.agent_node import AgentNode
+from src.cognition.control_flow import ControlFlowNode
+from src.cognition.latency_observer import LatencyObserver
+from src.cognition.replanner import SubTreeReplanner
+from src.control.dag_builder import DAGBuilder
+from src.control.output_controller import OutputController
 from src.core.config_loader import AppConfig
+from src.core.environment import LaboratoryEnvironment
+from src.evaluation.mock_scheduler import MockScheduler
+from src.execution.hardware_executor import HardwareExecutor
 from src.interfaces.scheduler_adapter import ISchedulerAdapter, IStatusReporter
+from src.memory.milestone_engine import MilestoneEngine
+from src.memory.skill_library import SkillLibrary
+from src.memory.working_memory import WorkingMemory
 from src.types import (
     AtomicSkillRecord,
     ExecutionNodeRef,
     ExecutionResult,
     MilestoneStateDescription,
+    NodeRunContext,
     PhysicalConstraints,
+    PlanNode,
     PlanRequest,
     PlanResponse,
 )
@@ -88,6 +111,14 @@ class AstroPlan:
         Object with call(prompt: str) -> str.  None → mock planner in AgentNode.
     status_reporter:
         Optional IStatusReporter.  None → no-op.
+    env:
+        Pre-built LaboratoryEnvironment; if provided, _build_components() is
+        skipped.  Intended for testing and integration scenarios where the caller
+        constructs the environment directly.
+    skill_library:
+        Pre-built SkillLibrary; used only when ``env`` is also provided.  When
+        ``env`` is None this parameter is ignored (the library is built inside
+        _build_components).
     """
 
     def __init__(
@@ -98,16 +129,26 @@ class AstroPlan:
         *,
         llm_client: Optional[Any] = None,
         status_reporter: Optional[Any] = None,
+        env: Optional[Any] = None,
+        skill_library: Optional[Any] = None,
     ) -> None:
         self._config = config
         self._interlock = interlock
         self._registry = registry
         self._llm = llm_client
         self._reporter: Any = status_reporter or _NullStatusReporter()
-
         self._revision_counter: int = 0
-        self._env: Optional[Any] = None          # LaboratoryEnvironment (lazy)
-        self._skill_library: Optional[Any] = None  # SkillLibrary (lazy)
+
+        # Eager initialisation — configuration errors surface immediately at
+        # construction time rather than being deferred to the first plan() call.
+        # Tests may inject a pre-built env to bypass _build_components().
+        if env is not None:
+            self._env: Any = env
+            self._skill_library: Any = (
+                skill_library or SkillLibrary(lab_id=config.lab_id)
+            )
+        else:
+            self._env, self._skill_library = self._build_components()
 
     # ------------------------------------------------------------------
     # Public API
@@ -124,10 +165,6 @@ class AstroPlan:
             skills into WorkingMemory so the agent skips them, then reruns
             the tree for the remaining goal.
         """
-        self._init_components()
-
-        from src.control.dag_builder import DAGBuilder
-
         revision_id = self._make_revision_id(request.current_revision_id)
         lab_id = self._config.lab_id
 
@@ -138,7 +175,6 @@ class AstroPlan:
         self._env.plan_mode = True
 
         # Reset working memory; re-seed FSM states
-        from src.memory.working_memory import WorkingMemory
         mem = WorkingMemory(lab_id=lab_id)
         for subsystem, state in self._interlock.current_states().items():
             mem.update_subsystem_state(subsystem, state)
@@ -161,7 +197,6 @@ class AstroPlan:
             for ref in request.completed_nodes:
                 raw = prev_nodes_by_lineage.get(ref.lineage_id)
                 if raw:
-                    from src.types import PlanNode
                     frozen = PlanNode(
                         node_id=raw.get("node_id", ref.node_id),
                         lineage_id=ref.lineage_id,
@@ -175,8 +210,6 @@ class AstroPlan:
                     self._env._dag.seed_completed_node(frozen)
 
         # Run the agent tree (plan_mode=True — only writes to DAGBuilder)
-        from src.cognition.agent_node import AgentNode
-        from src.types import NodeRunContext
         root = AgentNode(
             node_id="root",
             llm_client=self._llm,
@@ -204,8 +237,7 @@ class AstroPlan:
                 f"('{request.mission_context[:60]}'). "
                 "Activating mock-planner fallback."
             )
-            from src.cognition.agent_node import AgentNode as _AgentNode
-            mock_root = _AgentNode(
+            mock_root = AgentNode(
                 node_id="root_mock_fallback",
                 llm_client=None,   # None forces mock planner
                 depth=0,
@@ -283,16 +315,20 @@ class AstroPlan:
         plan_mode remains False during this call so MockScheduler can
         actually invoke skills via the MCPRegistry.
         """
-        from src.evaluation.mock_scheduler import MockScheduler
-
         sched = scheduler or MockScheduler(self._registry, failure_rate=0.0)
         eff_reporter = reporter or self._reporter
 
         max_replans = self._config.orchestrator.max_replan_depth
         request = PlanRequest(mission_context=mission)
 
+        snapshot: Any = None
         for attempt in range(max_replans + 1):
-            state_before = self._env._memory.snapshot() if self._env else None
+            # Capture the pre-mission world state.  self._env is always non-None
+            # (initialised eagerly in __init__) so no conditional is needed here.
+            # plan() will reset _env._memory internally; this snapshot reflects
+            # the FSM state and any action history from previous attempts.
+            state_before = self._env._memory.snapshot()
+
             response = await self.plan(request)
             await sched.submit_plan(response)
             snapshot = await sched.await_terminal_event()
@@ -365,9 +401,6 @@ class AstroPlan:
         MilestoneEngine.build_index() is updated immediately so the next plan()
         call benefits from the enriched index.
         """
-        if self._skill_library is None or self._env is None:
-            return
-
         # Build AtomicSkillRecord list from the completed PlanNodes in order
         completed_ids = {ref.node_id for ref in snapshot_completed}
         # Preserve topological order from response.nodes
@@ -445,26 +478,13 @@ class AstroPlan:
         self._revision_counter += 1
         return f"rev_{self._revision_counter:03d}"
 
-    def _init_components(self) -> None:
-        """Lazy-init LaboratoryEnvironment and SkillLibrary with all sub-components."""
-        if self._env is not None:
-            return
+    def _build_components(self) -> tuple:
+        """Construct all collaborators. Raises immediately on configuration error.
 
-        from src.memory.working_memory import WorkingMemory
-        from src.memory.milestone_engine import MilestoneEngine
-        from src.memory.skill_library import SkillLibrary
-        from src.control.output_controller import OutputController
-        from src.control.dag_builder import DAGBuilder
-        from src.cognition.agent_node import AgentNode
-        from src.cognition.control_flow import ControlFlowNode
-        from src.cognition.replanner import SubTreeReplanner
-        from src.cognition.latency_observer import LatencyObserver
-        from src.application.ground_command_receiver import GroundCommandReceiver
-        from src.application.hitl_operator import HITLSuspensionOperator
-        from src.application.web_monitor import WebMonitor
-        from src.execution.hardware_executor import HardwareExecutor
-        from src.core.environment import LaboratoryEnvironment
-
+        Returns
+        -------
+        (LaboratoryEnvironment, SkillLibrary)
+        """
         lab_id = self._config.lab_id
 
         mem = WorkingMemory(lab_id=lab_id)
@@ -486,16 +506,18 @@ class AstroPlan:
         )
         output_ctrl = OutputController(compress=self._config.mcp.compress)
         milestone_engine = MilestoneEngine()
-        self._skill_library = SkillLibrary(lab_id=lab_id)
+        skill_library = SkillLibrary(lab_id=lab_id)
         gcr = GroundCommandReceiver()
-        hitl = HITLSuspensionOperator(timeout_s=self._config.orchestrator.hitl_timeout_s)
+        hitl = HITLSuspensionOperator(
+            timeout_s=self._config.orchestrator.hitl_timeout_s
+        )
         monitor = WebMonitor(
             host=self._config.web_monitor.host,
             port=self._config.web_monitor.port,
-            enabled=False,  # Never start WebSocket server during planning
+            enabled=self._config.web_monitor.enabled,
         )
 
-        self._env = LaboratoryEnvironment(
+        env = LaboratoryEnvironment(
             lab_id=lab_id,
             interlock_engine=self._interlock,
             working_memory=mem,
@@ -512,6 +534,8 @@ class AstroPlan:
             mcp_registry=self._registry,
             plan_mode=False,
         )
+
+        return env, skill_library
 
 
 # ---------------------------------------------------------------------------
