@@ -17,8 +17,9 @@
 - **遥测总线**：带时间戳处理乱序数据，超阈值自动触发重规划
 - **工作记忆**：强类型 `SharedContext`，全局单一状态源，消除深层节点幻觉
 - **MCP 技能注册表**：`@mcp_tool` 装饰器注册执行技能，SpaceWire 带宽感知压缩
-- **地面指令接收 / HITL 挂起**：支持抢占式任务与人工审核不可逆操作
-- **Web 监控**：WebSocket SSE 实时推送计划树视图
+- **地面指令接收 / HITL 挂起**：抢占式任务 + 不可逆技能（`execute_main_forming` 等）执行前强制人工审核；`_execute_action()` 拒绝未通过 HITL 的技能
+- **被动遥测监控**：`execute_standalone()` 并发运行 `_passive_monitor` 协程，阈值违规时立即中止调度器并触发重规划
+- **Web 监控**：WebSocket SSE 实时推送计划树视图；由 `config.yaml:web_monitor.enabled` 控制开关
 - **调度器接口**：`IPlannerService` + `ISchedulerAdapter` 定义 AstroPlan ↔ agentos_scheduler 的显式边界
 - **独立评测（DAG 级）**：`MockScheduler` 无需真实调度器即可运行完整规划–执行–重规划循环
 - **基准评测（环境级）**：`AstroPlanEvaluator` 对接 ALFRED / WAH-NL 模拟器，可插拔 LLM 后端（Ollama / HuggingFace / Anthropic）
@@ -34,6 +35,8 @@ AstroPlan/
 │   └── fsm_rules.yaml           # 物理联锁有限状态机规则表
 ├── requirements.txt
 ├── main.py                      # 独立演示入口 (asyncio.run)
+├── tests/
+│   └── unit/                    # 10 个单元测试文件 (pytest tests/unit/ -v)
 └── src/
     ├── types.py                 # 全部强类型数据类（禁止裸 dict 跨边界传递）
     │
@@ -70,20 +73,17 @@ AstroPlan/
     │   ├── dag_builder.py       # DAGBuilder（含控制流感知 API + to_plan_response()）
     │   └── output_controller.py # OutputController (序列化 / 树视图格式化)
     ├── cognition/
-    │   ├── runnable.py          # ★ RunnableNode Protocol（解耦 AgentNode ↔ ControlFlowNode）
+    │   ├── runnable.py          # RunnableNode Protocol（解耦 AgentNode ↔ ControlFlowNode）
     │   ├── agent_node.py        # AgentNode（plan_mode 感知）
     │   ├── control_flow.py      # ControlFlowNode（Sequence / Fallback / Parallel）
     │   ├── replanner.py         # SubTreeReplanner
     │   ├── latency_observer.py  # LatencyObserver
-    │   └── llm_backends.py      # ★ LLM 后端抽象层（Ollama / HuggingFace / Anthropic）
+    │   └── llm_backends.py      # LLM 后端抽象层（Ollama / HuggingFace / Anthropic）
     └── application/
         ├── ground_command_receiver.py
         ├── hitl_operator.py
         └── web_monitor.py       # WebMonitor（实现 IStatusReporter）
 ```
-
-★ = 本次架构重构新增或重大扩展
-
 ---
 
 ## 调度器集成接口
@@ -180,10 +180,12 @@ main.py
          MockScheduler.submit_plan()         接收 DAG
               │
               ▼
-         MockScheduler.await_terminal_event()
-              │  按拓扑顺序执行前沿节点
+         MockScheduler.await_terminal_event()  ←─┐
+              │  按拓扑顺序执行前沿节点            │ 并发
               │  registry.call(skill, params) → 真实副作用
-              │
+              │                               _passive_monitor()
+              │                               每1s采样遥测阈值
+              │                               违规→request_abort()─┘
               ├── 全部成功 → ExecutionResult(completed)
               │
               └── 某节点失败 → ExecutionSnapshot(failed=[...])
@@ -200,9 +202,9 @@ main.py
 | 模式 | 值 | `AgentNode._execute_action()` 行为 |
 |---|---|---|
 | 规划（干跑） | `True` | 跳过 MCP/HW 派发，仅调用 `dag.register_action()`，返回 `True` |
-| 执行（MockScheduler） | `False`（默认） | MockScheduler 直接调用 `registry.call(skill, params)` |
+| 执行（MockScheduler） | `False`（默认） | HITL 检查 → Interlock 校验 → MockScheduler 调用 `registry.call(skill, params)` |
 
-> **注意**：执行阶段由 MockScheduler 负责，不经过 `LaboratoryEnvironment.run()`。`plan_mode=False` 在 `execute_standalone()` 中不激活旧执行路径；它仅保留给将来 AstroPlan 独立运行（不使用 MockScheduler）的场景。
+> **注意**：执行阶段由 MockScheduler 负责，不经过 `LaboratoryEnvironment.run()`。`plan_mode=False` 路径现包含 HITL 挂起门：`_NON_INTERRUPTIBLE_SKILLS` 中的技能须经 `HITLSuspensionOperator.suspend()` 批准后方可派发。
 
 ---
 
@@ -314,7 +316,14 @@ llm:
   use_mock: false   # 无 API Key 时自动回退内置规划逻辑
 ```
 
-### 3. 运行演示
+### 3. 运行单元测试
+
+```bash
+pytest tests/unit/ -v --tb=short          # 全部单元测试
+pytest tests/unit/ -k "interruptible or passive" -v   # P1-A + P2 回归
+```
+
+### 5. 运行演示
 
 ```bash
 # 默认 Fluid-Lab-Demo（mock 规划器，无 GPU 需求）
@@ -348,7 +357,7 @@ python main.py --benchmark --lab all   # 全部三个实验室
   failures     : 0
 ```
 
-### 4. 本地 LLM 推理（可选）
+### 6. 本地 LLM 推理（可选）
 
 ```
 

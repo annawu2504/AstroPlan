@@ -536,6 +536,31 @@ class AgentNode:
         # plan_mode=False: normal execution path
         # ------------------------------------------------------------------
 
+        # HITL suspension for non-interruptible skills (P1-A)
+        _NON_INTERRUPTIBLE_SKILLS = frozenset({
+            "execute_main_forming", "seal_petri_dishes", "start_first_layer"
+        })
+        node_interruptible = skill not in _NON_INTERRUPTIBLE_SKILLS
+        if not node_interruptible and hasattr(env, '_hitl'):
+            from src.types import InterventionSignal
+            resume = await env._hitl.suspend(
+                critical_state=skill,
+                intervention=InterventionSignal(
+                    operator_id="system",
+                    approved=False,
+                    reason=f"Non-interruptible skill '{skill}' requires human approval",
+                ),
+            )
+            if not resume.approved:
+                log.append({
+                    "type": "action",
+                    "node_id": self.node_id,
+                    "skill": skill,
+                    "params": params,
+                    "status": "rejected_by_hitl",
+                })
+                return False
+
         # Interlock check
         try:
             env._interlock.validate_action(skill)

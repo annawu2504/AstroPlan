@@ -1,9 +1,4 @@
-"""Unit tests for AgentNode — mock planner paths, plan_mode dispatch.
-
-test_execute_action_non_interruptible_hitl_reject is marked xfail(strict=True):
-it documents the EXPECTED behaviour of P1-A (HITL integration) which is not
-yet implemented.  Remove the xfail marker when P1-A is complete.
-"""
+"""Unit tests for AgentNode — mock planner paths, plan_mode dispatch."""
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
@@ -192,15 +187,8 @@ def test_execute_action_interlock_failure_returns_false():
 # P1-A regression placeholder — HITL not yet wired (xfail strict=True)
 # ------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "P1-A not implemented: _execute_action() does not yet check interruptible=False "
-        "or suspend via HITLSuspensionOperator. Remove this marker after P1-A is complete."
-    ),
-)
 def test_execute_action_non_interruptible_hitl_reject():
-    """After P1-A: a non-interruptible skill with HITL rejection must return False."""
+    """P1-A: a non-interruptible skill with HITL rejection must return False."""
     env = _make_env(plan_mode=False)
     env._interlock.validate_action.return_value = None  # passes validation
     env._hitl.suspend = AsyncMock(return_value=ResumeSignal(approved=False))
@@ -216,3 +204,7 @@ def test_execute_action_non_interruptible_hitl_reject():
 
     assert result is False, "HITL rejection must cause _execute_action to return False"
     env._hitl.suspend.assert_awaited_once()
+
+
+# Canonical name required by the P0-B checklist — delegates to the xfail stub above.
+test_interruptible_false_rejects_on_hitl = test_execute_action_non_interruptible_hitl_reject

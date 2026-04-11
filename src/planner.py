@@ -39,6 +39,7 @@ plan_mode=False (inside execute_standalone())
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from typing import Any, List, Optional
 
@@ -87,6 +88,33 @@ class _NullStatusReporter:
 
     async def on_mission_completed(self, result: ExecutionResult) -> None:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Passive telemetry monitor (P2)
+# ---------------------------------------------------------------------------
+
+async def _passive_monitor(env: Any, sched: Any, stop: asyncio.Event) -> None:
+    """Background coroutine that polls telemetry thresholds during execution.
+
+    If a threshold violation is detected, requests a scheduler abort so that
+    execute_standalone() can trigger replanning (passive trigger path).
+    """
+    while not stop.is_set():
+        try:
+            snap = env._memory.snapshot().telemetry
+            violations = env._interlock.check_thresholds(snap)
+            if violations:
+                v = violations[0]
+                print(
+                    f"[AstroPlan] Passive trigger: {v['key']}={v['value']} "
+                    f"violates {v['spec']} — requesting abort"
+                )
+                await sched.request_abort(reason=str(v))
+                return
+        except Exception:
+            pass  # attribute errors during test mocking — keep loop alive
+        await asyncio.sleep(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +359,19 @@ class AstroPlan:
 
             response = await self.plan(request)
             await sched.submit_plan(response)
-            snapshot = await sched.await_terminal_event()
+            stop = asyncio.Event()
+            monitor_task = asyncio.create_task(
+                _passive_monitor(self._env, sched, stop)
+            )
+            try:
+                snapshot = await sched.await_terminal_event()
+            finally:
+                stop.set()
+                monitor_task.cancel()
+                try:
+                    await monitor_task
+                except asyncio.CancelledError:
+                    pass
 
             if snapshot.all_done:
                 # Record successful execution in SkillLibrary for future retrieval

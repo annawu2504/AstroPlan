@@ -151,6 +151,14 @@ class MockScheduler:
                     f"(lineage={node.lineage_id})"
                 )
 
+    async def request_abort(self, reason: str = "") -> None:
+        """Mark all pending/running nodes as FAILED so await_terminal_event returns."""
+        print(f"[MockScheduler] Abort requested: {reason}")
+        for nid, status in self._node_states.items():
+            if status in (NodeStatus.PENDING, NodeStatus.RUNNING):
+                self._node_states[nid] = NodeStatus.FAILED
+                self.total_failures += 1
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

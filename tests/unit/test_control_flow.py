@@ -268,3 +268,7 @@ def test_inline_replan_uses_env_skill_catalog():
             f"Replanned AgentNode received skills={kw.get('available_skills')!r}; "
             f"expected {test_skills!r}. P0-A fix not applied."
         )
+
+
+# Canonical name required by the P0-B checklist — delegates to the full test above.
+test_inline_replan_skill_catalog = test_inline_replan_uses_env_skill_catalog
