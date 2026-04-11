@@ -182,6 +182,11 @@ class AstroPlan:
     # Public API
     # ------------------------------------------------------------------
 
+    @property
+    def hitl_operator(self) -> Any:
+        """Expose the HITLSuspensionOperator for external callers (e.g. API server)."""
+        return self._env._hitl
+
     async def plan(self, request: PlanRequest) -> PlanResponse:
         """Generate or regenerate a complete plan DAG (plan_mode=True dry-run).
 

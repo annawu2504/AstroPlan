@@ -19,7 +19,8 @@
 - **MCP 技能注册表**：`@mcp_tool` 装饰器注册执行技能，SpaceWire 带宽感知压缩
 - **地面指令接收 / HITL 挂起**：抢占式任务 + 不可逆技能（`execute_main_forming` 等）执行前强制人工审核；`_execute_action()` 拒绝未通过 HITL 的技能
 - **被动遥测监控**：`execute_standalone()` 并发运行 `_passive_monitor` 协程，阈值违规时立即中止调度器并触发重规划
-- **Web 监控**：WebSocket SSE 实时推送计划树视图；由 `config.yaml:web_monitor.enabled` 控制开关
+- **Web 监控**：SSE 实时推送计划树视图；由 `config.yaml:web_monitor.enabled` 控制开关；`server.py` 提供完整 HTTP API（FastAPI）
+- **Web 前端**：React 19 单页应用，实时 DAG 可视化、HITL 审批控制台、指令注入、SSE 断线重连与快照协调
 - **调度器接口**：`IPlannerService` + `ISchedulerAdapter` 定义 AstroPlan ↔ agentos_scheduler 的显式边界
 - **独立评测（DAG 级）**：`MockScheduler` 无需真实调度器即可运行完整规划–执行–重规划循环
 - **基准评测（环境级）**：`AstroPlanEvaluator` 对接 ALFRED / WAH-NL 模拟器，可插拔 LLM 后端（Ollama / HuggingFace / Anthropic）
@@ -82,7 +83,17 @@ AstroPlan/
     └── application/
         ├── ground_command_receiver.py
         ├── hitl_operator.py
-        └── web_monitor.py       # WebMonitor（实现 IStatusReporter）
+        ├── web_monitor.py       # WebMonitor（实现 IStatusReporter，asyncio.Queue 广播）
+        ├── schemas.py           # Pydantic v2 API 边界模型（生成 OpenAPI / TS 类型）
+        ├── server.py            # FastAPI 服务器（HTTP + SSE，端口 8080）
+        └── astroplan_webui/     # React 19 前端（Vite + Tailwind CSS 4）
+            ├── src/
+            │   ├── features/    # 页面级组件（MissionControl / PlanViewer / HitlConsole / …）
+            │   ├── components/  # 复用组件（DAG 画布 / HITL 对话框 / 状态栏）
+            │   ├── stores/      # Zustand 5 状态（mission / plan / hitl / command / connection）
+            │   ├── hooks/       # useSseStream（重连协调）/ useDagLayout（Web Worker）
+            │   └── workers/     # dagLayout.worker.ts（Dagre 布局，主线程外运行）
+            └── e2e/             # Playwright E2E 测试（5 个核心场景）
 ```
 ---
 
@@ -357,7 +368,74 @@ python main.py --benchmark --lab all   # 全部三个实验室
   failures     : 0
 ```
 
-### 6. 本地 LLM 推理（可选）
+### 6. 启动 Web 界面
+
+**后端 API 服务器（FastAPI）：**
+
+```bash
+# 安装依赖（已加入 requirements.txt）
+pip install fastapi uvicorn[standard] pydantic>=2.0.0
+
+# 启动服务器（默认 http://localhost:8080）
+uvicorn src.application.server:app --host 0.0.0.0 --port 8080 --reload
+```
+
+**前端开发服务器：**
+
+```bash
+cd src/application/astroplan_webui
+bun install          # 或 npm install
+bun run dev          # http://localhost:5173（自动代理至 :8080）
+```
+
+**生产构建（前端嵌入后端静态文件）：**
+
+```bash
+cd src/application/astroplan_webui
+bun run build        # 输出至 dist/
+# FastAPI 自动从 astroplan_webui/dist/ 提供静态文件
+uvicorn src.application.server:app --port 8080
+```
+
+**类型生成（后端 OpenAPI → 前端 TypeScript）：**
+
+```bash
+cd src/application/astroplan_webui
+bun run generate:types   # 调用 scripts/export_schema.py | openapi-typescript
+```
+
+**E2E 测试（Playwright）：**
+
+```bash
+cd src/application/astroplan_webui
+bun run test:e2e         # 5 个场景：任务提交、DAG 状态、HITL 审批、指令注入、SSE 重连
+```
+
+**Web 界面功能：**
+
+| 标签页 | 功能 |
+|---|---|
+| 任务控制 | 提交任务、选择实验室、查看执行历史 |
+| 规划树 | 实时 DAG 可视化（React Flow + Dagre）、节点状态着色、简化/完整视图切换 |
+| 人机协同 | HITL 审批对话框（Escape 锁定）、超时倒计时、参数编辑、已处理记录 |
+| 指令中心 | 实时指令注入、队列状态追踪、历史记录 |
+| 接口文档 | 服务状态看板、可用实验室列表、端点参考（链接至 `/docs`） |
+
+**API 端点（`server.py`）：**
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/events` | SSE 实时事件流（15s keepalive） |
+| `POST` | `/mission/start` | 启动新任务 |
+| `POST` | `/mission/stop` | 中止当前任务 |
+| `POST` | `/hitl/respond` | 提交 HITL 审批结果 |
+| `POST` | `/command/inject` | 注入实时指令（支持队列） |
+| `GET` | `/plan/snapshot` | 获取当前规划快照（断线重连使用） |
+| `GET` | `/health` | 服务状态检查 |
+| `GET` | `/labs` | 获取可用实验室列表 |
+| `GET` | `/docs` | FastAPI Swagger UI |
+
+### 7. 本地 LLM 推理（可选）
 
 ```
 
