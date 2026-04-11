@@ -40,14 +40,14 @@ AstroPlan/
 └── src/
     ├── types.py                 # 全部强类型数据类（禁止裸 dict 跨边界传递）
     │
-    ├── planner.py               # ★ AstroPlan — IPlannerService 实现（公开 API）
+    ├── planner.py               # AstroPlan — IPlannerService 实现（公开 API）
     │
-    ├── interfaces/              # ★ 调度器交互显式接口
+    ├── interfaces/              # 调度器交互显式接口
     │   ├── __init__.py          #   统一 re-export
     │   ├── planner_service.py   #   IPlannerService Protocol
     │   └── scheduler_adapter.py #   ISchedulerAdapter, IStatusReporter, ExecutionSnapshot
     │
-    ├── evaluation/              # ★ 评测工具
+    ├── evaluation/              # 评测工具
     │   ├── __init__.py
     │   ├── mock_scheduler.py    #   MockScheduler — ISchedulerAdapter 的本地模拟实现
     │   ├── evaluator.py         #   AstroPlanEvaluator — ALFRED / WAH-NL 端到端评测
