@@ -514,6 +514,36 @@ class AstroPlan:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _load_manual_milestones(self, lab_id: str, milestone_engine: Any) -> None:
+        """Parse ``config/labs/{lab_id}/manual.txt`` and seed MilestoneEngine.
+
+        No-op when the file is absent, the LLM client is None (mock mode),
+        or the registry has no registered skills yet.
+        """
+        import os
+        manual_path = os.path.join("config", "labs", lab_id, "manual.txt")
+        if not os.path.exists(manual_path):
+            return
+        if self._llm is None:
+            return
+
+        from src.memory.manual_parser import ManualParser
+        parser = ManualParser(self._llm, self._registry)
+        try:
+            with open(manual_path, "r", encoding="utf-8") as fh:
+                manual_text = fh.read()
+            manual_milestones = parser.parse(manual_text, lab_id)
+        except Exception as exc:
+            print(f"[AstroPlan] ManualParser error for '{manual_path}': {exc}")
+            return
+
+        if manual_milestones:
+            milestone_engine.build_index(manual_milestones)
+            print(
+                f"[AstroPlan] ManualParser: {len(manual_milestones)} milestone(s) "
+                f"loaded from '{manual_path}'"
+            )
+
     def _make_revision_id(self, prev: Optional[str]) -> str:
         self._revision_counter += 1
         return f"rev_{self._revision_counter:03d}"
@@ -547,6 +577,10 @@ class AstroPlan:
         output_ctrl = OutputController(compress=self._config.mcp.compress)
         milestone_engine = MilestoneEngine()
         skill_library = SkillLibrary(lab_id=lab_id)
+
+        # Load milestones from experiment manual if available (P4 — ManualParser).
+        # Only attempted when an LLM client is configured; mock mode skips silently.
+        self._load_manual_milestones(lab_id, milestone_engine)
         gcr = GroundCommandReceiver()
         hitl = HITLSuspensionOperator(
             timeout_s=self._config.orchestrator.hitl_timeout_s

@@ -1,0 +1,65 @@
+Fiber-Composite-Lab Experiment Manual
+空间连续纤维增强复合材料原位成型实验操作规程
+======================================================
+
+Overview
+--------
+This experiment performs in-situ forming of continuous carbon-fiber (CF)
+reinforced PEEK composite samples aboard the space station. The procedure
+must be executed in strict sequence to satisfy FSM constraints and obtain
+BACC (Beijing Aerospace Flight Control Center) authorizations at critical
+decision points.
+
+Phase 1 — Environment Preparation
+-----------------------------------
+1. Enable the vacuum exhaust system (enable_vacuum_exhaust) as the very
+   first step. The exhaust prevents conductive CF debris from floating and
+   short-circuiting cabin electronics. All subsequent steps require the
+   vacuum to be RUNNING.
+
+2. Preheat the extrusion nozzle to 380°C (preheat_nozzle). Nozzle reaches
+   READY state once temperature is within ±2°C of setpoint (~5 min).
+
+3. Preheat the ceramic build platform to 150°C (preheat_platform).
+   This improves first-layer PEEK adhesion in microgravity.
+
+4. Execute the print-head homing sequence (home_printhead) to zero the
+   motion system and confirm filament tension is in the 0.5–1.2 N range.
+
+Phase 2 — Authorization and First Layer
+-----------------------------------------
+5. Request experiment start authorization from BACC
+   (request_bacc_authorization). Wait for telemetry confirmation before
+   proceeding. This is a mandatory ground-link checkpoint.
+
+6. Begin first-layer carbon-fiber deposition (start_first_layer). Requires
+   all four subsystems to be in their READY/RUNNING states and BACC
+   authorization to be received.
+
+7. Scan the spreading ratio of the first layer (scan_spreading_ratio).
+   Target ratio is 1.2–1.8. Nominal plans assume acceptable ratio; adjustments
+   are handled by the replanner if the ratio is out of range.
+
+Phase 3 — Multilayer Forming
+------------------------------
+8. Ramp fiber tension from start tension to forming tension
+   (ramp_fiber_tension) before proceeding to additional layers.
+
+9. Execute the main forming sequence (execute_main_forming). This is a
+   non-interruptible skill that requires human-in-the-loop approval before
+   dispatch.
+
+10. Cut the fiber at the end of the forming run (cut_fiber).
+
+Phase 4 — Inspection and Closure
+----------------------------------
+11. Inspect the composite sample for voids or delamination
+    (inspect_composite). Records quality metrics.
+
+12. Disable the vacuum exhaust system (disable_vacuum_exhaust) once all
+    debris risk has passed and the build is complete.
+
+Safety constraints:
+- Nozzle temperature must not exceed 400°C.
+- Vacuum flow must remain ≥10 L/min while CF material is exposed.
+- execute_main_forming requires explicit HITL approval.

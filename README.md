@@ -319,7 +319,7 @@ llm:
 ### 3. 运行单元测试
 
 ```bash
-pytest tests/unit/ -v --tb=short          # 全部单元测试
+pytest tests/unit/ -v --tb=short          # 全部单元测试（98 条）
 pytest tests/unit/ -k "interruptible or passive" -v   # P1-A + P2 回归
 ```
 

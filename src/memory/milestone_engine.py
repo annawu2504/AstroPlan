@@ -177,6 +177,38 @@ class MilestoneEngine:
         return result
 
     # ------------------------------------------------------------------
+    # Per-step semantic distance (论文研究内容一：微观逐步语义距离)
+    # ------------------------------------------------------------------
+
+    def compute_step_distance(
+        self, completed_skills: List[str], milestone: Milestone
+    ) -> float:
+        """Normalized remaining trajectory distance for one milestone.
+
+        Returns a value in [0.0, 1.0]:
+          1.0 — no trajectory steps have been executed yet (furthest away)
+          0.0 — every trajectory step has been completed (goal reached)
+
+        The distance is recomputed at every agent-node invocation because
+        ``completed_skills`` grows as execution progresses, making this a
+        dynamic per-step signal rather than a static planning-time score.
+
+        Parameters
+        ----------
+        completed_skills:
+            Ordered list of skill names that have been executed so far
+            (derived from ``SharedContext.action_log``).
+        milestone:
+            The Milestone whose trajectory is checked.
+        """
+        steps = [s.skill_name for s in milestone.trajectory.steps]
+        if not steps:
+            return 0.0
+        done_set = set(completed_skills)
+        done = sum(1 for s in steps if s in done_set)
+        return 1.0 - done / len(steps)
+
+    # ------------------------------------------------------------------
     # Tokenisation helpers
     # ------------------------------------------------------------------
 

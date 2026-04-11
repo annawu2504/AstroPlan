@@ -180,3 +180,68 @@ def test_retrieve_higher_success_rate_preferred():
     results = engine.retrieve(query_state={}, goal="run pump", top_k=2)
     if len(results) == 2:
         assert results[0].trajectory.success_rate >= results[1].trajectory.success_rate
+
+
+# ------------------------------------------------------------------
+# compute_step_distance
+# ------------------------------------------------------------------
+
+def test_compute_step_distance_untouched():
+    """No steps completed yet → distance is 1.0 (furthest away)."""
+    engine = MilestoneEngine()
+    m = _milestone("heat sample", ["activate_pump", "heat_to_40", "activate_camera"])
+    assert engine.compute_step_distance([], m) == pytest.approx(1.0)
+
+
+def test_compute_step_distance_complete():
+    """All trajectory steps already done → distance is 0.0."""
+    engine = MilestoneEngine()
+    m = _milestone("heat sample", ["activate_pump", "heat_to_40"])
+    assert engine.compute_step_distance(["activate_pump", "heat_to_40"], m) == pytest.approx(0.0)
+
+
+def test_compute_step_distance_partial():
+    """One of two steps done → distance is 0.5."""
+    engine = MilestoneEngine()
+    m = _milestone("heat sample", ["activate_pump", "heat_to_40"])
+    assert engine.compute_step_distance(["activate_pump"], m) == pytest.approx(0.5)
+
+
+def test_compute_step_distance_empty_trajectory():
+    """Milestone with no trajectory steps → 0.0 (no division-by-zero)."""
+    engine = MilestoneEngine()
+    m = _milestone("empty", [])
+    assert engine.compute_step_distance(["anything"], m) == pytest.approx(0.0)
+
+
+def test_compute_step_distance_extra_completed_steps_ignored():
+    """Extra completed steps beyond the trajectory do not push distance below 0."""
+    engine = MilestoneEngine()
+    m = _milestone("heat", ["heat_to_40"])
+    # heat_to_40 done + extra unrelated skills
+    dist = engine.compute_step_distance(["heat_to_40", "cool_down", "activate_camera"], m)
+    assert dist == pytest.approx(0.0)
+
+
+def test_compute_step_distance_decreases_as_steps_complete():
+    """Distance strictly decreases as more trajectory steps are executed."""
+    engine = MilestoneEngine()
+    skills = ["activate_pump", "heat_to_40", "activate_camera"]
+    m = _milestone("full experiment", skills)
+
+    d0 = engine.compute_step_distance([], m)
+    d1 = engine.compute_step_distance(["activate_pump"], m)
+    d2 = engine.compute_step_distance(["activate_pump", "heat_to_40"], m)
+    d3 = engine.compute_step_distance(["activate_pump", "heat_to_40", "activate_camera"], m)
+
+    assert d0 > d1 > d2 > d3
+    assert d3 == pytest.approx(0.0)
+
+
+def test_compute_step_distance_order_independent():
+    """Distance is based on set membership, not order of completion."""
+    engine = MilestoneEngine()
+    m = _milestone("heat", ["activate_pump", "heat_to_40"])
+    # Same skills, different order
+    assert engine.compute_step_distance(["heat_to_40", "activate_pump"], m) == \
+           engine.compute_step_distance(["activate_pump", "heat_to_40"], m)

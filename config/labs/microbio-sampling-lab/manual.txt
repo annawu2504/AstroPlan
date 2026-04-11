@@ -1,0 +1,63 @@
+Microbio-Sampling-Lab Experiment Manual
+天和核心舱空气微生物采样实验操作规程
+=================================================
+
+Overview
+--------
+This experiment collects passive air microbial samples from the Tianhe core
+module using agar petri dishes, then cultures the samples in an onboard
+incubator and photographs colony growth for ground analysis. The procedure
+requires strict sterile technique and ground authorization before opening
+petri dishes.
+
+Phase 1 — Pre-Experiment Setup
+---------------------------------
+1. Clear the cabin: direct non-experiment crew to leave the Tianhe core
+   module and close the hatch (clear_cabin). The experimenter dons gloves,
+   mask, and sterile garment.
+
+2. Sterilize the incubator interior with isopropanol cloth (sterilize_incubator).
+
+3. Pre-heat the incubator to 36 ±1°C (preheat_incubator). The incubator
+   must reach temperature before petri dishes are opened.
+
+4. Retrieve and inspect the three agar petri dishes from cargo package 9-2;
+   wipe surfaces and attach position labels (prepare_petri_dishes).
+
+Phase 2 — Pre-Sampling Checks
+-------------------------------
+5. Confirm the incubator has reached 36°C setpoint (verify_incubator_ready).
+   Dishes must not be opened until the incubator is READY.
+
+6. Fix the prepared petri dishes at anchor positions 2, 15, and 60 using
+   Velcro straps (mount_petri_dishes). Confirm secure locking.
+
+7. Report status to ground control and request sampling authorization
+   (request_sampling_authorization). Do not open dishes until authorization
+   is received.
+
+Phase 3 — Air Sampling
+------------------------
+8. Open all three petri dish lids simultaneously (open_petri_dishes).
+   The experimenter holds breath and retreats ≥2 m from each dish.
+   The 20-minute passive sampling timer begins.
+
+9. After exactly 20 minutes, seal all petri dishes with parafilm
+   (seal_petri_dishes). Do not touch the agar surface.
+
+Phase 4 — Incubation and Analysis
+------------------------------------
+10. Transfer the sealed petri dishes into the pre-warmed incubator
+    (transfer_to_incubator). Incubation runs 48–72 hours at 36°C.
+
+11. After incubation, photograph colony morphology with the high-resolution
+    camera and upload images to the ground database (photograph_colonies).
+
+12. Package archived petri dishes into the bio-sample recovery box for
+    return to Earth (package_for_return).
+
+Safety constraints:
+- Dishes may only be opened after cabin is CLEARED and ground authorization
+  is received.
+- Incubator must be READY (36°C) before open_petri_dishes.
+- seal_petri_dishes requires explicit HITL approval (non-interruptible).

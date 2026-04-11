@@ -1,0 +1,36 @@
+Fluid-Lab-Demo Experiment Manual
+=================================
+
+Overview
+--------
+This experiment circulates fluid through a heated sample chamber while a
+camera records visual data. The procedure has three phases: startup,
+observation, and shutdown.
+
+Phase 1 — Startup
+-----------------
+1. Activate the fluid circulation pump (activate_pump). The pump must be
+   running before any heating begins.
+2. Once the pump is confirmed active, heat the sample to 40°C (heat_to_40).
+3. Start camera recording (activate_camera) to capture fluid dynamics
+   during the heating phase.
+
+Safety constraint: temperature must not exceed 45°C. If the thermal
+subsystem reports a temperature above this threshold, issue an
+emergency_stop immediately.
+
+Phase 2 — Observation
+---------------------
+1. Optionally read telemetry (read_telemetry) to verify flow_rate ≥ 10 L/min
+   and temperature is stable at 40 ± 1°C.
+2. Maintain camera recording throughout the observation window.
+
+Phase 3 — Shutdown
+------------------
+1. Cool the thermal subsystem back to ambient (cool_down) before stopping
+   the pump.
+2. Stop camera recording (deactivate_camera).
+3. Deactivate the pump (deactivate_pump) after cool-down is confirmed.
+
+In an anomaly or end-of-mission scenario, call emergency_stop which
+performs the shutdown sequence automatically.

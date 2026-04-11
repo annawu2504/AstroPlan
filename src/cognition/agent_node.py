@@ -119,23 +119,32 @@ class AgentNode:
         milestones: List[Milestone],
     ) -> str:
         # Render top-2 milestones using 4-tuple fields; cap steps at 8 to stay compact.
+        # Compute per-step semantic distance so the LLM sees dynamic progress, not a
+        # static snapshot (论文研究内容一：微观逐步语义距离动态重算).
+        completed_skills = [
+            e.get("skill", "") for e in context.action_log if e.get("skill")
+        ]
         milestone_txt = ""
         for m in milestones[:2]:
             step_names = [s.skill_name for s in m.trajectory.steps[:8]]
             pre_states = m.state_description.subsystem_states
+            total_n = len(m.trajectory.steps)
+            if self._milestone_engine is not None and total_n > 0:
+                dist = self._milestone_engine.compute_step_distance(completed_skills, m)
+                done_n = round((1.0 - dist) * total_n)
+                progress_str = f"  Progress: {done_n}/{total_n} steps done (distance={dist:.2f})\n"
+            else:
+                progress_str = ""
             milestone_txt += (
                 f"\n- Goal: {m.task_vector.goal_text}"
                 f"\n  Pre-state: {pre_states}"
-                f"\n  Steps ({len(m.trajectory.steps)}): {step_names}"
-                f"\n  Success rate: {m.trajectory.success_rate:.0%}"
+                f"\n  Steps ({total_n}): {step_names}"
+                f"\n  {progress_str}"
+                f"  Success rate: {m.trajectory.success_rate:.0%}"
             )
 
         path_parts = self.node_id.split("_")
         tree_path = " > ".join(path_parts) if len(path_parts) > 1 else self.node_id
-        # Only include non-empty skill names from the action log
-        completed_skills = [
-            e.get("skill", "") for e in context.action_log if e.get("skill")
-        ]
         completed_txt = ", ".join(completed_skills) if completed_skills else "none"
 
         if self.available_skills:
