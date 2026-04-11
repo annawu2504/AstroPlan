@@ -566,6 +566,7 @@ class AstroPlan:
         replanner = SubTreeReplanner(
             max_depth=self._config.orchestrator.max_replan_depth,
             agent_node=agent_node,
+            thresholds=self._interlock._thresholds,
         )
         latency_obs = LatencyObserver(
             threshold_ms=self._config.orchestrator.latency_threshold_ms
