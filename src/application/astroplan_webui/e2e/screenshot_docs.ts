@@ -60,13 +60,28 @@ const DEMO_EDGES = [
   { from: 'n3', to: 'n4' },
 ]
 
+// Snapshot for pages that start with an active executing mission
 const DEMO_SNAPSHOT = {
   revision_id: 'rev-001',
-  mission: '进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。',
+  active_mission: '进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。',
   mission_status: 'executing',
+  selected_lab: 'Fluid-Lab-Demo',
   nodes: DEMO_NODES,
   edges: DEMO_EDGES,
   node_statuses: { n1: 'completed', n2: 'running', n3: 'running', n4: 'pending' },
+  pending_gates: [],
+  as_of: Date.now(),
+}
+
+// Snapshot for pages that should start idle (so the textarea is not disabled)
+const IDLE_SNAPSHOT = {
+  revision_id: null,
+  active_mission: null,
+  mission_status: 'idle',
+  selected_lab: 'Fluid-Lab-Demo',
+  nodes: [],
+  edges: [],
+  node_statuses: {},
   pending_gates: [],
   as_of: Date.now(),
 }
@@ -85,17 +100,21 @@ const DEMO_HITL_GATE = {
 // Mock all API routes
 // ---------------------------------------------------------------------------
 
-async function mockRoutes(page: Page, sseQueue: { push: (data: string) => void }) {
+async function mockRoutes(
+  page: Page,
+  sseQueue: { push: (data: string) => void },
+  snapshot = DEMO_SNAPSHOT,
+) {
   await page.route('**/health', (r) =>
     r.fulfill({ status: 200, contentType: 'application/json',
-      body: JSON.stringify({ status: 'ok', mission_status: 'executing', pending_gates: 1, command_queue: 0, revisions: 1 }) }),
+      body: JSON.stringify({ status: 'ok', mission_status: snapshot.mission_status, pending_gates: snapshot.pending_gates.length, command_queue: 0, revisions: snapshot.revision_id ? 1 : 0 }) }),
   )
   await page.route('**/labs', (r) =>
     r.fulfill({ status: 200, contentType: 'application/json',
       body: JSON.stringify({ labs: ['Fluid-Lab-Demo', 'fiber-composite-lab', 'microbio-sampling-lab'] }) }),
   )
   await page.route('**/plan/snapshot', (r) =>
-    r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(DEMO_SNAPSHOT) }),
+    r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot) }),
   )
   await page.route('**/mission/start', (r) =>
     r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, message: 'started' }) }),
@@ -142,9 +161,7 @@ function pushSse(queue: { push: (d: string) => void }, event: string, payload: R
 // Main
 // ---------------------------------------------------------------------------
 
-const BASE_URL = process.env.ASTROPLAN_REAL_BACKEND === '1'
-  ? 'http://localhost:5173'
-  : 'http://localhost:5173'
+const BASE_URL = 'http://localhost:5173'
 
 async function main() {
   console.log(`\nAstroPlan — documentation screenshots`)
@@ -161,12 +178,7 @@ async function main() {
   {
     const page = await context.newPage()
     const q = { push: (_: string) => {} }
-    await mockRoutes(page, q)
-    // override health for idle state
-    await page.route('**/health', (r) =>
-      r.fulfill({ status: 200, contentType: 'application/json',
-        body: JSON.stringify({ status: 'ok', mission_status: 'idle', pending_gates: 0, command_queue: 0, revisions: 0 }) }),
-    )
+    await mockRoutes(page, q, IDLE_SNAPSHOT)
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(800)   // let React hydrate
     await shot(page, '01_mission_control_idle')
@@ -177,9 +189,10 @@ async function main() {
   {
     const page = await context.newPage()
     const q = { push: (_: string) => {} }
-    await mockRoutes(page, q)
+    // Use idle snapshot so reconciliation leaves the textarea enabled
+    await mockRoutes(page, q, IDLE_SNAPSHOT)
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
-    await page.waitForTimeout(800)   // let React hydrate
+    await page.waitForTimeout(800)   // let React hydrate + reconcile
 
     // fill and submit
     const input = page.locator('textarea').first()
@@ -209,7 +222,7 @@ async function main() {
     pushSse(q, 'node_status', { node_id: 'n2', lineage_id: 'l2', status: 'running' })
     pushSse(q, 'node_status', { node_id: 'n3', lineage_id: 'l3', status: 'running' })
 
-    await page.getByRole('tab', { name: /计划|Plan/i }).click()
+    await page.locator('[role="tab"][data-value="plan"]').click()
     await page.waitForTimeout(800)   // let Dagre layout settle
     await shot(page, '03_plan_viewer_dag')
     await page.close()
@@ -223,7 +236,7 @@ async function main() {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(300)
     pushSse(q, 'plan_generated', { plan: { revision_id: 'rev-001', nodes: DEMO_NODES, edges: DEMO_EDGES } }, 'rev-001')
-    await page.getByRole('tab', { name: /计划|Plan/i }).click()
+    await page.locator('[role="tab"][data-value="plan"]').click()
     try {
       await page.waitForSelector('[data-testid="plan-node-n1"]', { timeout: 5000 })
       await page.getByTestId('plan-node-n1').click()
@@ -242,8 +255,8 @@ async function main() {
     await mockRoutes(page, q)
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(300)
-    pushSse(q, 'hitl_gate_opened', { gate: DEMO_HITL_GATE })
-    await page.getByRole('tab', { name: /人机协同|HITL/i }).click()
+    pushSse(q, 'hitl_suspended', { gate: DEMO_HITL_GATE })
+    await page.locator('[role="tab"][data-value="hitl"]').click()
     await page.waitForTimeout(600)
     await shot(page, '05_hitl_console_pending')
     await page.close()
@@ -255,7 +268,7 @@ async function main() {
     const q = { push: (_: string) => {} }
     await mockRoutes(page, q)
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
-    await page.getByRole('tab', { name: /指令|Command/i }).click()
+    await page.locator('[role="tab"][data-value="command"]').click()
     await page.waitForTimeout(400)
     // Pre-fill a command
     try {
@@ -272,7 +285,7 @@ async function main() {
     const q = { push: (_: string) => {} }
     await mockRoutes(page, q)
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
-    await page.getByRole('tab', { name: /接口|API|Reference/i }).click()
+    await page.locator('[role="tab"][data-value="api"]').click()
     await page.waitForTimeout(400)
     await shot(page, '07_api_reference')
     await page.close()
