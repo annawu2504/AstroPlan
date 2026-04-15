@@ -167,8 +167,8 @@ async function main() {
       r.fulfill({ status: 200, contentType: 'application/json',
         body: JSON.stringify({ status: 'ok', mission_status: 'idle', pending_gates: 0, command_queue: 0, revisions: 0 }) }),
     )
-    await page.goto(BASE_URL)
-    await page.waitForSelector('[data-testid="mission-input"], textarea', { timeout: 5000 })
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
+    await page.waitForTimeout(800)   // let React hydrate
     await shot(page, '01_mission_control_idle')
     await page.close()
   }
@@ -178,11 +178,11 @@ async function main() {
     const page = await context.newPage()
     const q = { push: (_: string) => {} }
     await mockRoutes(page, q)
-    await page.goto(BASE_URL)
-    await page.waitForSelector('[data-testid="mission-input"], textarea', { timeout: 5000 })
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
+    await page.waitForTimeout(800)   // let React hydrate
 
     // fill and submit
-    const input = page.locator('[data-testid="mission-input"], textarea').first()
+    const input = page.locator('textarea').first()
     await input.fill('进行流体实验：激活泵，加热至40°C，启动摄像头记录数据。')
     await page.keyboard.press('Control+Enter')
     await page.waitForTimeout(400)
@@ -199,7 +199,7 @@ async function main() {
     const page = await context.newPage()
     const q = { push: (_: string) => {} }
     await mockRoutes(page, q)
-    await page.goto(BASE_URL)
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(300)
 
     // push plan_generated before navigating to plan tab
@@ -220,7 +220,7 @@ async function main() {
     const page = await context.newPage()
     const q = { push: (_: string) => {} }
     await mockRoutes(page, q)
-    await page.goto(BASE_URL)
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(300)
     pushSse(q, 'plan_generated', { plan: { revision_id: 'rev-001', nodes: DEMO_NODES, edges: DEMO_EDGES } }, 'rev-001')
     await page.getByRole('tab', { name: /计划|Plan/i }).click()
@@ -240,7 +240,7 @@ async function main() {
     const page = await context.newPage()
     const q = { push: (_: string) => {} }
     await mockRoutes(page, q)
-    await page.goto(BASE_URL)
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(300)
     pushSse(q, 'hitl_gate_opened', { gate: DEMO_HITL_GATE })
     await page.getByRole('tab', { name: /人机协同|HITL/i }).click()
@@ -254,7 +254,7 @@ async function main() {
     const page = await context.newPage()
     const q = { push: (_: string) => {} }
     await mockRoutes(page, q)
-    await page.goto(BASE_URL)
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.getByRole('tab', { name: /指令|Command/i }).click()
     await page.waitForTimeout(400)
     // Pre-fill a command
@@ -271,7 +271,7 @@ async function main() {
     const page = await context.newPage()
     const q = { push: (_: string) => {} }
     await mockRoutes(page, q)
-    await page.goto(BASE_URL)
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.getByRole('tab', { name: /接口|API|Reference/i }).click()
     await page.waitForTimeout(400)
     await shot(page, '07_api_reference')
